@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+*.p8
+*.p12
+*.mobileprovision
+/.secrets/
+*.xcodeproj
+*.xcworkspace
+.build/
+.swiftpm/
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
