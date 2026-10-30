@@ -19,7 +19,7 @@ XCODEGEN = xcodegen
 # xcodebuild
 XCODEBUILD = xcodebuild
 SCHEME = BlankGrimoire
-DESTINATION = 'platform=macOS,arch=arm64,variant=Designed for [iPad,iPhone]'
+DESTINATION = 'platform=iOS Simulator,name=iPhone 16'
 
 # Colors
 GREEN = \033[0;32m
@@ -139,14 +139,12 @@ sync-sdk-release:
 # Strip extended attributes that cause code signing issues on macOS
 clean-xattrs:
 	@echo "$(YELLOW)Cleaning extended attributes...$(NC)"
-	@find .build -name "*.xctest" -exec xattr -cr {} \; 2>/dev/null || true
+	@find Packages/ReaderCore/.build -name "*.xctest" -exec xattr -cr {} \; 2>/dev/null || true
 
+# ReaderCore package tests
 test-readercore: clean-xattrs
-	@echo "$(GREEN)Running ReaderCore package tests via xcodebuild...$(NC)"
-	$(XCODEBUILD) test \
-		-scheme $(SCHEME) \
-		-destination $(DESTINATION) \
-		CODE_SIGNING_ALLOWED=NO
+	@echo "$(GREEN)Running ReaderCore package tests...$(NC)"
+	@cd Packages/ReaderCore && xattr -cr .build/out/Products/Debug/ReaderCoreTests.xctest 2>/dev/null; swift test
 
 # Clean
 clean:
