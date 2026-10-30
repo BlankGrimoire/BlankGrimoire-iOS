@@ -46,4 +46,4 @@ jobs:
       - name: Build app
         run: make build
         env:
-          DESTINATION: 'platform=iOS Simulator,name=iPhone 16,OS=latest'
+          DESTINATION: generic/platform=iOS Simulator

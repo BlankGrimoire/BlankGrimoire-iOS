@@ -20,7 +20,7 @@ XCODEGEN = xcodegen
 # xcodebuild
 XCODEBUILD = xcodebuild
 SCHEME = BlankGrimoire
-DESTINATION ?= 'platform=iOS Simulator,name=iPhone 16'
+DESTINATION ?= platform=iOS Simulator,name=iPhone 17
 
 # Colors
 GREEN = \033[0;32m
@@ -46,7 +46,7 @@ help:
 	@echo "Variables:"
 	@echo "  SDK_REPO_PATH      Path to SDK repo (default: ../BlankGrimoire-sdk)"
 	@echo "  SCHEME             Xcode scheme (default: BlankGrimoire)"
-	@echo "  DESTINATION        Simulator destination (default: iPhone 16)"
+	@echo "  DESTINATION        Simulator destination (default: iPhone 17)"
 
 generate: $(XCODE_PROJECT)
 
@@ -57,16 +57,18 @@ $(XCODE_PROJECT): $(PROJECT_YML) Packages/ReaderCore/Package.swift
 build: generate
 	@echo "$(GREEN)Building $(SCHEME) for $(DESTINATION)...$(NC)"
 	$(XCODEBUILD) build \
+		-project $(XCODE_PROJECT) \
 		-scheme $(SCHEME) \
-		-destination $(DESTINATION) \
+		-destination '$(DESTINATION)' \
 		CODE_SIGNING_ALLOWED=NO \
 		GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
 test: generate
 	@echo "$(GREEN)Running tests...$(NC)"
 	$(XCODEBUILD) test \
+		-project $(XCODE_PROJECT) \
 		-scheme $(SCHEME) \
-		-destination $(DESTINATION) \
+		-destination '$(DESTINATION)' \
 		CODE_SIGNING_ALLOWED=NO
 
 format:
