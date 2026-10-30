@@ -118,7 +118,7 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
         var currentMethod = request.method.uppercased()
         var currentBody = request.body
         
-        for redirectCount in 0...maxRedirects {
+        for _ in 0...maxRedirects {
             // Re-validate allowlist for each redirect
             if !isAllowed(currentURL.absoluteString) {
                 throw BridgeError.notAllowed(currentURL.absoluteString)
@@ -359,7 +359,7 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
         }
         
         let scripts = try document.select("script")
-        return try scripts.map { try $0.data() }.filter { !$0.isEmpty }
+        return scripts.map { $0.data() }.filter { !$0.isEmpty }
     }
     
     // Allow external read access to documents for detection scoring

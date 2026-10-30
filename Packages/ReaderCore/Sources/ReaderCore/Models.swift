@@ -359,54 +359,115 @@ public enum ExtractionStrategy: Codable, Sendable, Equatable {
 }
 
 public struct CSSStrategy: Codable, Sendable, Equatable {
-    public let kind: String = "css"
+    public let kind: String
     public let image: String
     public let srcAttributes: [String]
     public let headers: [String: String]?
     
     public init(image: String, srcAttributes: [String], headers: [String: String]? = nil) {
+        self.kind = "css"
         self.image = image
         self.srcAttributes = srcAttributes
         self.headers = headers
     }
+    
+    private enum CodingKeys: String, CodingKey {
+        case kind, image, srcAttributes, headers
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        image = try container.decode(String.self, forKey: .image)
+        srcAttributes = try container.decode([String].self, forKey: .srcAttributes)
+        headers = try container.decodeIfPresent([String: String].self, forKey: .headers)
+    }
 }
 
 public struct ScriptJSONStrategy: Codable, Sendable, Equatable {
-    public let kind: String = "scriptJSON"
+    public let kind: String
     public let pattern: String
     public let path: String
     public let base64: Bool?
     
     public init(pattern: String, path: String, base64: Bool? = nil) {
+        self.kind = "scriptJSON"
         self.pattern = pattern
         self.path = path
         self.base64 = base64
     }
+    
+    private enum CodingKeys: String, CodingKey {
+        case kind, pattern, path, base64
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        pattern = try container.decode(String.self, forKey: .pattern)
+        path = try container.decode(String.self, forKey: .path)
+        base64 = try container.decodeIfPresent(Bool.self, forKey: .base64)
+    }
 }
 
 public struct HydrationStrategy: Codable, Sendable, Equatable {
-    public let kind: String = "hydration"
+    public let kind: String
     public let framework: String // "next" | "nuxt"
     public let path: String?
     
     public init(framework: String, path: String? = nil) {
+        self.kind = "hydration"
         self.framework = framework
         self.path = path
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case kind, framework, path
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        framework = try container.decode(String.self, forKey: .framework)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
     }
 }
 
 public final class AjaxStrategy: Codable, Sendable, Equatable {
-    public let kind: String = "ajax"
+    public let kind: String
     public let method: String // "GET" | "POST"
     public let path: String
     public let body: String?
     public let `then`: ExtractionStrategy
     
     public init(method: String, path: String, body: String? = nil, then: ExtractionStrategy) {
+        self.kind = "ajax"
         self.method = method
         self.path = path
         self.body = body
         self.then = then
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case kind, method, path, body, `then`
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        method = try container.decode(String.self, forKey: .method)
+        path = try container.decode(String.self, forKey: .path)
+        body = try container.decodeIfPresent(String.self, forKey: .body)
+        then = try container.decode(ExtractionStrategy.self, forKey: .then)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(method, forKey: .method)
+        try container.encode(path, forKey: .path)
+        try container.encodeIfPresent(body, forKey: .body)
+        try container.encode(then, forKey: .then)
     }
     
     public static func == (lhs: AjaxStrategy, rhs: AjaxStrategy) -> Bool {

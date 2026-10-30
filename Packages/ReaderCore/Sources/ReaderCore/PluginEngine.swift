@@ -133,7 +133,7 @@ public final class PluginEngine: ObservableObject {
         injectBridge(into: context)
         
         // Load bundle
-        let loadResult = context.evaluateScript(bundleSource, withSourceURL: bundleURL)
+        _ = context.evaluateScript(bundleSource, withSourceURL: bundleURL)
         if let exception = context.exception {
             throw PluginEngineError.bundleLoadFailed(exception.toString())
         }

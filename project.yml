@@ -36,7 +36,7 @@ targets:
     resources:
       - path: BlankGrimoire/Resources
     dependencies:
-      - target: ReaderCore
+      - package: ReaderCore
       - sdk: SwiftData.framework
       - sdk: WebKit.framework
       - sdk: Combine.framework
@@ -62,28 +62,7 @@ targets:
       - path: BlankGrimoireTests
     dependencies:
       - target: BlankGrimoire
-      - target: ReaderCore
-
-  ReaderCore:
-    type: framework
-    platform: iOS
-    deploymentTarget: "17.0"
-    language: swift
-    settings:
-      base:
-        SWIFT_VERSION: "6.0"
-        SWIFT_STRICT_CONCURRENCY: "complete"
-        PRODUCT_BUNDLE_IDENTIFIER: com.blankgrimoire.readercore
-        PRODUCT_NAME: ReaderCore
-        SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
-        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Packages/ReaderCore/.build/checkouts"
-    sources:
-      - path: Packages/ReaderCore/Sources
-    dependencies:
-      - sdk: Foundation.framework
-      - sdk: SwiftData.framework
-      - sdk: Combine.framework
-      - sdk: WebKit.framework
+      - package: ReaderCore
 
 # Packages via SwiftPM (local package)
 packages:

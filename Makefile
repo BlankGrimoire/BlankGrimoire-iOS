@@ -136,10 +136,17 @@ sync-sdk-release:
 	rm -rf "$$TEMP_DIR"; \
 	echo "$(GREEN)SDK release sync complete!$(NC)"
 
-# ReaderCore package tests
-test-readercore:
-	@echo "$(GREEN)Running ReaderCore package tests...$(NC)"
-	$(SWIFT_TEST) --package-path Packages/ReaderCore
+# Strip extended attributes that cause code signing issues on macOS
+clean-xattrs:
+	@echo "$(YELLOW)Cleaning extended attributes...$(NC)"
+	@find .build -name "*.xctest" -exec xattr -cr {} \; 2>/dev/null || true
+
+test-readercore: clean-xattrs
+	@echo "$(GREEN)Running ReaderCore package tests via xcodebuild...$(NC)"
+	$(XCODEBUILD) test \
+		-scheme $(SCHEME) \
+		-destination $(DESTINATION) \
+		CODE_SIGNING_ALLOWED=NO
 
 # Clean
 clean:
