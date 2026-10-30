@@ -1,0 +1,18 @@
+{
+  "key": "lorem-ipsum",
+  "title": "Lorem Ipsum",
+  "coverURL": "https://example.org/covers/lorem-ipsum.jpg",
+  "altTitles": ["Dolor Sit Amet"],
+  "authors": ["Lorem Author"],
+  "artists": ["Ipsum Artist"],
+  "synopsis": "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+  "tags": ["lorem", "ipsum"],
+  "status": "ongoing",
+  "contentRating": "safe",
+  "attribution": {
+    "siteName": "Example Library",
+    "siteURL": "https://example.org/",
+    "logoURL": "https://example.org/logo.png",
+    "credits": "Lorem ipsum credits"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "metaGenerator": "^ExampleCMS",
+  "selectors": [".example-reader", ".example-chapter-list"],
+  "scriptSrc": ["/assets/example-theme\\.js"],
+  "probePaths": ["/example-feed.json"],
+  "minScore": 5
+}
