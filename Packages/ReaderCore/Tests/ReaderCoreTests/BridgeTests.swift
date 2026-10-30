@@ -34,7 +34,7 @@ final class NativeBridgeTests: XCTestCase {
     
     func testRejectDifferentDomain() {
         XCTAssertFalse(bridge.isAllowed("https://example.com/"))
-        XCTAssertFalse(bridge.isAllowed("https://evil.example.org/"))
+        XCTAssertFalse(bridge.isAllowed("https://evil.com/"))
     }
     
     func testAllowLoopback() {

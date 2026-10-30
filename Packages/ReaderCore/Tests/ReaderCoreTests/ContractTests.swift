@@ -11,23 +11,45 @@ final class ContractTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         
-        // Locate fixtures and schema from SDK sync
+        // Locate fixtures and schema from test bundle resources
         let bundle = Bundle(for: ContractTests.self)
-        let resourcesURL = bundle.resourceURL?.deletingLastPathComponent().deletingLastPathComponent()
         
-        if let resourcesURL = resourcesURL {
-            self.fixturesURL = resourcesURL
-                .appendingPathComponent("BlankGrimoire")
-                .appendingPathComponent("Resources")
-                .appendingPathComponent("Contract")
-                .appendingPathComponent("fixtures")
-                .appendingPathComponent("v1")
-            
-            self.schemaURL = resourcesURL
-                .appendingPathComponent("BlankGrimoire")
-                .appendingPathComponent("Resources")
-                .appendingPathComponent("Contract")
-                .appendingPathComponent("schema-v1.json")
+        // Fixtures are copied as test resources to Tests/ReaderCoreTests/Resources/Contract/fixtures/v1
+        if let fixturesURL = bundle.url(forResource: "fixtures", withExtension: nil, subdirectory: "Contract") {
+            self.fixturesURL = fixturesURL.appendingPathComponent("v1")
+        } else {
+            // Fallback for CI where resources might be at different path
+            let bundle = Bundle(for: ContractTests.self)
+            let resourcesURL = bundle.resourceURL?.deletingLastPathComponent().deletingLastPathComponent()
+            if let resourcesURL = resourcesURL {
+                self.fixturesURL = resourcesURL
+                    .appendingPathComponent("Packages")
+                    .appendingPathComponent("ReaderCore")
+                    .appendingPathComponent("Tests")
+                    .appendingPathComponent("ReaderCoreTests")
+                    .appendingPathComponent("Resources")
+                    .appendingPathComponent("Contract")
+                    .appendingPathComponent("fixtures")
+                    .appendingPathComponent("v1")
+            }
+        }
+        
+        // Schema is at Resources/Contract/schema-v1.json
+        if let schemaURL = bundle.url(forResource: "schema-v1", withExtension: "json", subdirectory: "Contract") {
+            self.schemaURL = schemaURL
+        } else {
+            let bundle = Bundle(for: ContractTests.self)
+            let resourcesURL = bundle.resourceURL?.deletingLastPathComponent().deletingLastPathComponent()
+            if let resourcesURL = resourcesURL {
+                self.schemaURL = resourcesURL
+                    .appendingPathComponent("Packages")
+                    .appendingPathComponent("ReaderCore")
+                    .appendingPathComponent("Tests")
+                    .appendingPathComponent("ReaderCoreTests")
+                    .appendingPathComponent("Resources")
+                    .appendingPathComponent("Contract")
+                    .appendingPathComponent("schema-v1.json")
+            }
         }
     }
     
