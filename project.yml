@@ -1,0 +1,109 @@
+name: BlankGrimoire
+
+# App target
+targets:
+  BlankGrimoire:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    language: swift
+    scheme:
+      testTargets:
+        - BlankGrimoireTests
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: "complete"
+        ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        INFOPLIST_FILE: BlankGrimoire/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.blankgrimoire.app
+        PRODUCT_NAME: BlankGrimoire
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
+        CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: "YES"
+        ENABLE_TESTING_SEARCH_PATHS: "YES"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          OTHER_SWIFT_FLAGS: -enable-bare-slash-regex
+        Release:
+          SWIFT_COMPILATION_MODE: wholemodule
+    sources:
+      - path: BlankGrimoire
+    resources:
+      - path: BlankGrimoire/Resources
+    dependencies:
+      - target: ReaderCore
+      - sdk: SwiftData.framework
+      - sdk: WebKit.framework
+      - sdk: Combine.framework
+      - sdk: SwiftUI.framework
+
+  BlankGrimoireTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    language: swift
+    scheme:
+      testTargets:
+        - BlankGrimoireTests
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: "complete"
+        INFOPLIST_FILE: BlankGrimoireTests/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.blankgrimoire.app.tests
+        PRODUCT_NAME: BlankGrimoireTests
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
+    sources:
+      - path: BlankGrimoireTests
+    dependencies:
+      - target: BlankGrimoire
+      - target: ReaderCore
+
+  ReaderCore:
+    type: framework
+    platform: iOS
+    deploymentTarget: "17.0"
+    language: swift
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: "complete"
+        PRODUCT_BUNDLE_IDENTIFIER: com.blankgrimoire.readercore
+        PRODUCT_NAME: ReaderCore
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Packages/ReaderCore/.build/checkouts"
+    sources:
+      - path: Packages/ReaderCore/Sources
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: SwiftData.framework
+      - sdk: Combine.framework
+      - sdk: WebKit.framework
+
+# Packages via SwiftPM (local package)
+packages:
+  ReaderCore:
+    path: Packages/ReaderCore
+
+# Schemes
+schemes:
+  BlankGrimoire:
+    build:
+      targets:
+        BlankGrimoire: all
+    test:
+      targets:
+        - BlankGrimoireTests
+    run:
+      config: Debug
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    profile:
+      config: Release
