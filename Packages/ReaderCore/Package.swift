@@ -7,23 +7,23 @@ let package = Package(
     name: "ReaderCore",
     platforms: [
         .iOS(.v17),
-        .macOS(.v14)
+        .macOS(.v14),
     ],
     products: [
         .library(
             name: "ReaderCore",
             targets: ["ReaderCore"]
-        ),
+        )
     ],
     dependencies: [
         // SwiftSoup for HTML parsing (native bridge implementation)
-        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.6.0"),
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.6.0")
     ],
     targets: [
         .target(
             name: "ReaderCore",
             dependencies: [
-                .product(name: "SwiftSoup", package: "SwiftSoup"),
+                .product(name: "SwiftSoup", package: "SwiftSoup")
             ],
             path: "Sources/ReaderCore",
             swiftSettings: [

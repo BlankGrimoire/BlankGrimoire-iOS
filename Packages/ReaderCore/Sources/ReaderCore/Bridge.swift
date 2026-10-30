@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import Foundation
-import WebKit
 import SwiftSoup
+import WebKit
 
 // MARK: - Native Bridge Protocol
 
@@ -11,19 +11,19 @@ import SwiftSoup
 public protocol NativeBridge: Sendable {
     /// Perform an HTTP request
     func request(_ request: HttpRequest) async throws -> HttpResponse
-    
+
     /// Parse HTML string into a document
     func parseHTML(_ html: String) async throws -> ParsedDocument
-    
+
     /// Logging
     func log(_ message: String, _ level: Int, _ context: [String: Any]?)
     func error(_ message: String, _ level: Int, _ context: [String: Any]?)
     func warn(_ message: String, _ level: Int, _ context: [String: Any]?)
-    
+
     /// Timer management
     func setTimeout(_ callback: @escaping @Sendable () -> Void, _ ms: Int) -> Int
     func clearTimeout(_ id: Int)
-    
+
     /// Allowlist management
     func isAllowed(_ url: String) -> Bool
 }
@@ -34,7 +34,7 @@ public struct HttpRequest: Codable, Sendable {
     public let method: String
     public let headers: [String: String]?
     public let body: String?
-    
+
     public init(url: String, method: String = "GET", headers: [String: String]? = nil, body: String? = nil) {
         self.url = url
         self.method = method
@@ -49,7 +49,7 @@ public struct HttpResponse: Codable, Sendable {
     public let url: String
     public let headers: [String: String]
     public let body: String
-    
+
     public init(status: Int, url: String, headers: [String: String], body: String) {
         self.status = status
         self.url = url
@@ -63,7 +63,7 @@ public struct ParsedDocument: Codable, Sendable {
     public let documentId: String
     public let title: String?
     public let url: String
-    
+
     public init(documentId: String, title: String?, url: String) {
         self.documentId = documentId
         self.title = title
@@ -78,7 +78,7 @@ public struct SelectorQuery: Codable, Sendable {
     public let documentId: String
     public let selector: String
     public let multiple: Bool
-    
+
     public init(documentId: String, selector: String, multiple: Bool = false) {
         self.documentId = documentId
         self.selector = selector
@@ -93,8 +93,10 @@ public struct ElementResult: Codable, Sendable {
     public let textContent: String?
     public let attributes: [String: String]
     public let outerHTML: String?
-    
-    public init(elementId: String, tagName: String, textContent: String?, attributes: [String: String], outerHTML: String?) {
+
+    public init(
+        elementId: String, tagName: String, textContent: String?, attributes: [String: String], outerHTML: String?
+    ) {
         self.elementId = elementId
         self.tagName = tagName
         self.textContent = textContent
@@ -114,7 +116,7 @@ public enum JSValue: Codable, Sendable {
     case string(String)
     case array([JSValue])
     case object([String: JSValue])
-    
+
     public init(_ value: Any?) {
         if value == nil || value is NSNull {
             self = .null
@@ -134,7 +136,7 @@ public enum JSValue: Codable, Sendable {
             self = .string(String(describing: value))
         }
     }
-    
+
     public func toAny() -> Any? {
         switch self {
         case .null: return NSNull()
@@ -154,12 +156,12 @@ public enum JSValue: Codable, Sendable {
 public final class TimerHandle: @unchecked Sendable {
     public let id: Int
     private let timer: Timer
-    
+
     public init(id: Int, timer: Timer) {
         self.id = id
         self.timer = timer
     }
-    
+
     public func invalidate() {
         timer.invalidate()
     }
@@ -178,7 +180,7 @@ public enum BridgeError: Error, LocalizedError, Sendable {
     case timerNotFound(Int)
     case bridgeNotInitialized
     case jsExecutionError(String)
-    
+
     public var errorDescription: String? {
         switch self {
         case .notAllowed(let url): return "Host not allowed by allowlist: \(url)"

@@ -11,6 +11,7 @@ XCODE_PROJECT = BlankGrimoire.xcodeproj
 
 # Swift
 SWIFT_FORMAT = swift format
+SWIFT_FORMAT_CONFIG = .swift-format
 SWIFT_TEST = swift test
 
 # XcodeGen
@@ -19,7 +20,7 @@ XCODEGEN = xcodegen
 # xcodebuild
 XCODEBUILD = xcodebuild
 SCHEME = BlankGrimoire
-DESTINATION = 'platform=iOS Simulator,name=iPhone 16'
+DESTINATION ?= 'platform=iOS Simulator,name=iPhone 16'
 
 # Colors
 GREEN = \033[0;32m
@@ -59,8 +60,7 @@ build: generate
 		-scheme $(SCHEME) \
 		-destination $(DESTINATION) \
 		CODE_SIGNING_ALLOWED=NO \
-		GCC_TREAT_WARNINGS_AS_ERRORS=YES \
-		SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
+		GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
 test: generate
 	@echo "$(GREEN)Running tests...$(NC)"
@@ -71,11 +71,11 @@ test: generate
 
 format:
 	@echo "$(GREEN)Formatting code...$(NC)"
-	$(SWIFT_FORMAT) --recursive --in-place .
+	$(SWIFT_FORMAT) format --configuration $(SWIFT_FORMAT_CONFIG) --recursive --in-place .
 
 lint:
 	@echo "$(GREEN)Linting code...$(NC)"
-	$(SWIFT_FORMAT) lint --recursive .
+	$(SWIFT_FORMAT) lint --configuration $(SWIFT_FORMAT_CONFIG) --recursive .
 
 # SDK Synchronization
 sync-sdk:

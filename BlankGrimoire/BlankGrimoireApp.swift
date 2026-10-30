@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 @main
 struct BlankGrimoireApp: App {
