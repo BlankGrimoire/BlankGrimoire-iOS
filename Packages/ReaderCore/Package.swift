@@ -37,12 +37,16 @@ let package = Package(
             name: "ReaderCoreTests",
             dependencies: ["ReaderCore"],
             path: "Tests/ReaderCoreTests",
+            resources: [
+                .copy("Resources/Contract/fixtures/v1")
+            ],
             swiftSettings: [
                 .unsafeFlags(["-Xlinker", "-no_application_extension"])
             ],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-no_application_extension"])
-            ]
+            ],
+            plugins: []
         ),
     ]
 )

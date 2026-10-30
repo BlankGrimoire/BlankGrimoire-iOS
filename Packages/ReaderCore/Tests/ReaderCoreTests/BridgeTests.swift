@@ -10,7 +10,9 @@ final class NativeBridgeTests: XCTestCase {
     
     override func setUp() async throws {
         try await super.setUp()
-        bridge = NativeBridgeImpl(allowedHosts: ["example.org", "127.0.0.1"])
+        // Use wildcard for subdomain support: *.example.org allows www.example.org, api.example.org, etc.
+        // Without wildcard, only exact match (example.org) is allowed.
+        bridge = NativeBridgeImpl(allowedHosts: ["*.example.org", "127.0.0.1"])
     }
     
     override func tearDown() async throws {
@@ -118,18 +120,19 @@ final class NativeBridgeTests: XCTestCase {
     
     // MARK: - Timer Tests
     
-    func testSetTimeout() async throws {
-        let expectation = XCTestExpectation(description: "Timer fired")
-        
-        let id = bridge.setTimeout({
-            expectation.fulfill()
-        }, 10)
-        
-        await fulfillment(of: [expectation], timeout: 1.0)
-        
-        // Timer should be cleaned up - we can't directly test internal state,
-        // but we can verify the timer doesn't fire again
-    }
+    @MainActor
+func testSetTimeout() async throws {
+    let expectation = XCTestExpectation(description: "Timer fired")
+    
+    _ = bridge.setTimeout({
+        expectation.fulfill()
+    }, 10)
+    
+    await fulfillment(of: [expectation], timeout: 1.0)
+    
+    // Timer should be cleaned up - we can't directly test internal state,
+    // but we can verify the timer doesn't fire again
+}
     
     func testClearTimeout() {
         let fired = OSAllocatedUnfairLock(initialState: false)

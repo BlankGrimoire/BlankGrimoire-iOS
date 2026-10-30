@@ -8,7 +8,7 @@ import WebKit
 
 /// Thread-safe native bridge implementation
 public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
-    // Allowlist
+    // Allowlist - supports exact hosts and wildcard subdomains (e.g., "*.example.org")
     private var allowedHosts: Set<String> = []
     private let allowlistLock = NSLock()
     
@@ -46,6 +46,8 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
     
     // MARK: - Allowlist
     
+    /// Check if a URL's host is allowed.
+    /// Supports exact matches (example.org) and wildcard subdomains (*.example.org).
     public func isAllowed(_ url: String) -> Bool {
         guard let parsed = URL(string: url),
               let host = parsed.host?.lowercased() else {
@@ -53,9 +55,24 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
         }
         
         return allowlistLock.withLock {
-            allowedHosts.contains { allowed in
-                host == allowed || host.hasSuffix(".\(allowed)")
+            // Check each allowed pattern
+            for allowed in allowedHosts {
+                let allowedLower = allowed.lowercased()
+                
+                // Exact match
+                if host == allowedLower {
+                    return true
+                }
+                
+                // Wildcard subdomain: *.example.org matches www.example.org, api.example.org, etc.
+                if allowedLower.hasPrefix("*.") {
+                    let domain = String(allowedLower.dropFirst(2)) // Remove "*."
+                    if host == domain || host.hasSuffix(".\(domain)") {
+                        return true
+                    }
+                }
             }
+            return false
         }
     }
     
