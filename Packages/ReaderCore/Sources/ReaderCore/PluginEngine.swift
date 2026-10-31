@@ -97,7 +97,7 @@ public final class AdapterRuntime {
 
 /// Manages JavaScriptCore contexts and adapter lifecycle
 public final class PluginEngine: ObservableObject {
-    public static let supportedAPIVersion = 1
+    public static let supportedAPIVersion = ContractVersion.current
 
     @Published public private(set) var loadedAdapters: [String: AdapterRuntime] = [:]
     @Published public private(set) var currentAdapter: AdapterRuntime?

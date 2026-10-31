@@ -13,6 +13,7 @@ XCODE_PROJECT = BlankGrimoire.xcodeproj
 SWIFT_FORMAT = swift format
 SWIFT_FORMAT_CONFIG = .swift-format
 SWIFT_TEST = swift test
+SWIFT_TEST_FLAGS ?=
 
 # XcodeGen
 XCODEGEN = xcodegen
@@ -47,6 +48,7 @@ help:
 	@echo "  SDK_REPO_PATH      Path to SDK repo (default: ../BlankGrimoire-sdk)"
 	@echo "  SCHEME             Xcode scheme (default: BlankGrimoire)"
 	@echo "  DESTINATION        Simulator destination (default: iPhone 17)"
+	@echo "  SWIFT_TEST_FLAGS   Extra flags for swift test (e.g. --scratch-path)"
 
 generate: $(XCODE_PROJECT)
 
@@ -144,9 +146,11 @@ clean-xattrs:
 	@find Packages/ReaderCore/.build -name "*.xctest" -exec xattr -cr {} \; 2>/dev/null || true
 
 # ReaderCore package tests
+# Use SWIFT_TEST_FLAGS="--scratch-path /path/outside/iCloud" if macOS attaches
+# extended attributes to the build directory and code signing fails locally.
 test-readercore: clean-xattrs
 	@echo "$(GREEN)Running ReaderCore package tests...$(NC)"
-	@cd Packages/ReaderCore && xattr -cr .build/out/Products/Debug/ReaderCoreTests.xctest 2>/dev/null; swift test
+	@cd Packages/ReaderCore && xattr -cr .build/out/Products/Debug/ReaderCoreTests.xctest 2>/dev/null || true; $(SWIFT_TEST) $(SWIFT_TEST_FLAGS)
 
 # Clean
 clean:
