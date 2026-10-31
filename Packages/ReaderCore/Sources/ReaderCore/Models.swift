@@ -3,7 +3,31 @@
 import Foundation
 import SwiftData
 
+// MARK: - Validation Helpers
+
+/// Validation utilities for contract models
+enum ValidationHelper {
+    /// Validates that a string is a valid SHA-256 hash (64 hexadecimal characters)
+    static func isValidSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy(\.isHexDigit)
+    }
+
+    /// Validates that a string is valid base64 and decodes to the expected byte count
+    static func isValidBase64(_ value: String, byteCount: Int) -> Bool {
+        guard let data = Data(base64Encoded: value) else { return false }
+        return data.count == byteCount
+    }
+}
+
 // MARK: - Contract Models (mirrors SDK @blankgrimoire/types)
+
+/// The current API version implemented by this SDK.
+public enum ContractVersion {
+    public static let current = 1
+}
+
+/// Type alias for the API version.
+public typealias ApiVersion = Int
 
 /// ISO 8601 date-time string
 public typealias ISODateString = String
@@ -40,6 +64,50 @@ public struct Attribution: Codable, Sendable {
         self.siteURL = siteURL
         self.logoURL = logoURL
         self.credits = credits
+    }
+}
+
+/// Manga (contract type for API)
+public struct Manga: Codable, Sendable, Identifiable {
+    /// Opaque, stable key chosen by the adapter.
+    public let key: String
+    public let title: String
+    public let coverURL: URLString?
+    public let altTitles: [String]?
+    public let authors: [String]?
+    public let artists: [String]?
+    public let synopsis: String?
+    public let tags: [String]?
+    public let status: MangaStatus
+    public let contentRating: ContentRating
+    public let attribution: Attribution?
+
+    public var id: String { key }
+
+    public init(
+        key: String,
+        title: String,
+        coverURL: URLString? = nil,
+        altTitles: [String]? = nil,
+        authors: [String]? = nil,
+        artists: [String]? = nil,
+        synopsis: String? = nil,
+        tags: [String]? = nil,
+        status: MangaStatus,
+        contentRating: ContentRating,
+        attribution: Attribution? = nil
+    ) {
+        self.key = key
+        self.title = title
+        self.coverURL = coverURL
+        self.altTitles = altTitles
+        self.authors = authors
+        self.artists = artists
+        self.synopsis = synopsis
+        self.tags = tags
+        self.status = status
+        self.contentRating = contentRating
+        self.attribution = attribution
     }
 }
 
@@ -686,7 +754,7 @@ public struct ExtensionEntry: Codable, Sendable {
         sha256 = try container.decode(String.self, forKey: .sha256)
         bundleSignature = try container.decode(String.self, forKey: .bundleSignature)
 
-        guard isValidSHA256(sha256) else {
+        guard ValidationHelper.isValidSHA256(sha256) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .sha256,
                 in: container,
@@ -694,7 +762,7 @@ public struct ExtensionEntry: Codable, Sendable {
             )
         }
 
-        guard isValidBase64(bundleSignature, byteCount: 64) else {
+        guard ValidationHelper.isValidBase64(bundleSignature, byteCount: 64) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .bundleSignature,
                 in: container,
@@ -739,15 +807,15 @@ public struct AdapterManifest: Codable, Sendable {
         detectionSignature = try container.decode(ThemeSignature.self, forKey: .detectionSignature)
         sha256 = try container.decode(String.self, forKey: .sha256)
 
-        guard apiVersion == PluginEngine.supportedAPIVersion else {
+        guard apiVersion == ContractVersion.current else {
             throw DecodingError.dataCorruptedError(
                 forKey: .apiVersion,
                 in: container,
-                debugDescription: "Unsupported API version \(apiVersion); expected \(PluginEngine.supportedAPIVersion)"
+                debugDescription: "Unsupported API version \(apiVersion); expected \(ContractVersion.current)"
             )
         }
 
-        guard isValidSHA256(sha256) else {
+        guard ValidationHelper.isValidSHA256(sha256) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .sha256,
                 in: container,
@@ -755,15 +823,4 @@ public struct AdapterManifest: Codable, Sendable {
             )
         }
     }
-}
-
-// MARK: - Validation Helpers
-
-private func isValidSHA256(_ value: String) -> Bool {
-    value.count == 64 && value.allSatisfy(\.isHexDigit)
-}
-
-private func isValidBase64(_ value: String, byteCount: Int) -> Bool {
-    guard let data = Data(base64Encoded: value) else { return false }
-    return data.count == byteCount
 }

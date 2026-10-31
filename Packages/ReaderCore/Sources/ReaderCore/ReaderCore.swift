@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // ReaderCore - Public API
-// All public types are automatically available when importing ReaderCore
-// No need for @_exported imports within the same module
+// All types are defined in the same module (ReaderCore).
+// This file documents the public API for documentation purposes.
+// Types are automatically exported as public from their respective source files.
