@@ -49,11 +49,10 @@ final class SwiftDataMangaRepository: MangaRepository {
     }
 
     func fetchByStatus(_ status: MangaStatus) async throws -> [MangaEntity] {
-        let descriptor = FetchDescriptor<MangaEntity>(
-            predicate: #Predicate { $0.status == status },
-            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-        )
-        return try context.fetch(descriptor)
+        // Older SwiftData versions cannot capture enum values in #Predicate.
+        // Filtering in memory keeps this working across toolchains.
+        let all = try await fetchAll()
+        return all.filter { $0.status == status }
     }
 
     func fetchByTag(_ tag: String) async throws -> [MangaEntity] {
