@@ -33,8 +33,6 @@ targets:
           SWIFT_COMPILATION_MODE: wholemodule
     sources:
       - path: BlankGrimoire
-    resources:
-      - path: BlankGrimoire/Resources
     dependencies:
       - package: ReaderCore
       - sdk: SwiftData.framework

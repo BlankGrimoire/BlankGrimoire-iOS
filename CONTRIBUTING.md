@@ -21,8 +21,8 @@ Requirements: macOS, Xcode 16+, Swift 6, [XcodeGen](https://github.com/yonaskolb
 
 ```bash
 brew install xcodegen
-make gen    # generate BlankGrimoire.xcodeproj
-make test   # run package tests with `swift test`
+make gen              # generate BlankGrimoire.xcodeproj
+make test-readercore  # run the ReaderCore package tests
 ```
 
 The `.xcodeproj` is **generated and never committed**. To add files or

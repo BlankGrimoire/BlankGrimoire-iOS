@@ -28,8 +28,8 @@ gathers everything in a single, private library.
 ```bash
 git clone git@github.com:BlankGrimoire/BlankGrimoire-iOS.git
 cd BlankGrimoire-iOS
-make gen     # generates BlankGrimoire.xcodeproj (not versioned)
-make test    # runs package tests headlessly with `swift test`
+make gen              # generates BlankGrimoire.xcodeproj (not versioned)
+make test-readercore  # runs the ReaderCore package tests
 open BlankGrimoire.xcodeproj
 ```
 

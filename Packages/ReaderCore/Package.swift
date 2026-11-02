@@ -26,6 +26,9 @@ let package = Package(
                 .product(name: "SwiftSoup", package: "SwiftSoup")
             ],
             path: "Sources/ReaderCore",
+            resources: [
+                .copy("PluginEngine/Runtime/Resources/runtime.js")
+            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
                 .define("DEBUG", .when(configuration: .debug)),
