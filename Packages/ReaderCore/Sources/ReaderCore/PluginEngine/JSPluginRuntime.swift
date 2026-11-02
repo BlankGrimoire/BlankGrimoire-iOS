@@ -3,12 +3,6 @@
 import Foundation
 @preconcurrency import JavaScriptCore
 
-/// Performs an HTTP request on behalf of an adapter.
-///
-/// The allowlist and redirect policy belong to the native implementation
-/// supplied by IOS-3; the runtime only forwards the request.
-public typealias PluginRequestHandler = @Sendable (HttpRequest) async throws -> HttpResponse
-
 private struct LoadedAdapter {
     let value: JavaScriptCore.JSValue
     let id: String
@@ -61,8 +55,8 @@ public actor JSPluginRuntime {
     private let runtime: JavaScriptCore.JSValue
     private let adapter: JavaScriptCore.JSValue
     private let documentStore: PluginDocumentStore
-    private let requestHandler: PluginRequestHandler?
-    private let logger: Logger
+    private let bridge: PluginBridge
+    private let logger: PluginLogger
 
     private var requestBridgeInstalled = false
     private var disposed = false
@@ -71,8 +65,8 @@ public actor JSPluginRuntime {
         runtimeScript: String,
         adapterScript: String,
         manifest: AdapterManifest? = nil,
-        requestHandler: PluginRequestHandler? = nil,
-        logger: Logger = Logger()
+        bridge: PluginBridge,
+        logger: PluginLogger = ConsolePluginLogger()
     ) throws {
         guard let virtualMachine = JSVirtualMachine(),
             let context = JSContext(virtualMachine: virtualMachine)
@@ -84,10 +78,10 @@ public actor JSPluginRuntime {
         self.virtualMachine = virtualMachine
         self.context = context
         self.documentStore = documentStore
-        self.requestHandler = requestHandler
+        self.bridge = bridge
         self.logger = logger
 
-        try Self.configure(context: context, documentStore: documentStore, logger: logger)
+        try Self.configure(context: context, documentStore: documentStore, logger: logger, bridge: bridge)
 
         let loadedAdapter = try Self.loadAdapter(adapterScript, in: context, manifest: manifest)
         let runtime = try Self.loadRuntime(runtimeScript, in: context)
@@ -104,8 +98,8 @@ public actor JSPluginRuntime {
         adapterScriptURL: URL,
         manifest: AdapterManifest? = nil,
         runtimeScriptURL: URL? = nil,
-        requestHandler: PluginRequestHandler? = nil,
-        logger: Logger = Logger()
+        bridge: PluginBridge,
+        logger: PluginLogger = ConsolePluginLogger()
     ) throws -> JSPluginRuntime {
         let runtimeURL: URL
         if let runtimeScriptURL {
@@ -132,7 +126,7 @@ public actor JSPluginRuntime {
             runtimeScript: runtimeScript,
             adapterScript: adapterScript,
             manifest: manifest,
-            requestHandler: requestHandler,
+            bridge: bridge,
             logger: logger
         )
     }
@@ -223,6 +217,7 @@ public actor JSPluginRuntime {
         }
         disposed = true
         documentStore.clear()
+        bridge.dispose()
         context.setObject(nil, forKeyedSubscript: "__native" as NSString)
         context.setObject(nil, forKeyedSubscript: "__makeDocument" as NSString)
         context.setObject(nil, forKeyedSubscript: "__resolveRequest" as NSString)
@@ -233,7 +228,8 @@ public actor JSPluginRuntime {
     private static func configure(
         context: JSContext,
         documentStore: PluginDocumentStore,
-        logger: Logger
+        logger: PluginLogger,
+        bridge: PluginBridge
     ) throws {
         context.exceptionHandler = { _, exception in
             logger.error(
@@ -245,6 +241,7 @@ public actor JSPluginRuntime {
 
         installDOMBridge(in: context, documentStore: documentStore)
         installLoggingBridge(in: context, logger: logger)
+        installTimerBridge(in: context, bridge: bridge)
 
         let parseHTML: @convention(block) (String) -> String? = { html in
             try? documentStore.parse(html)
@@ -292,7 +289,7 @@ public actor JSPluginRuntime {
         context.setObject(innerHTML, forKeyedSubscript: "__domInnerHTML" as NSString)
     }
 
-    private static func installLoggingBridge(in context: JSContext, logger: Logger) {
+    private static func installLoggingBridge(in context: JSContext, logger: PluginLogger) {
         let log: @convention(block) (String) -> Void = { argumentsJSON in
             logger.log(Self.logMessage(from: argumentsJSON), level: 0, context: nil)
         }
@@ -306,6 +303,23 @@ public actor JSPluginRuntime {
         context.setObject(log, forKeyedSubscript: "__nativeLog" as NSString)
         context.setObject(error, forKeyedSubscript: "__nativeError" as NSString)
         context.setObject(warn, forKeyedSubscript: "__nativeWarn" as NSString)
+    }
+
+    private static func installTimerBridge(in context: JSContext, bridge: PluginBridge) {
+        let setTimeout: @convention(block) (Double, @Sendable @escaping @convention(block) () -> Void) -> Int = {
+            ms, callback in
+            bridge.setTimeout(Int(ms), callback)
+        }
+        let setInterval: @convention(block) (Double, @Sendable @escaping @convention(block) () -> Void) -> Int = {
+            ms, callback in
+            bridge.setInterval(Int(ms), callback)
+        }
+        let clearTimeout: @convention(block) (Int) -> Void = { id in
+            bridge.clearTimeout(id)
+        }
+        context.setObject(setTimeout, forKeyedSubscript: "__nativeSetTimeout" as NSString)
+        context.setObject(setInterval, forKeyedSubscript: "__nativeSetInterval" as NSString)
+        context.setObject(clearTimeout, forKeyedSubscript: "__nativeClearTimeout" as NSString)
     }
 
     private static func loadAdapter(
@@ -429,20 +443,12 @@ public actor JSPluginRuntime {
         guard !disposed else {
             return
         }
-        guard let requestHandler else {
-            resolveRequest(
-                requestID,
-                error: PluginEngineError.requestNotConfigured.localizedDescription,
-                responseJSON: nil
-            )
-            return
-        }
 
         do {
             let request = try JSONDecoder()
                 .decode(PluginRequestPayload.self, from: Data(payload.utf8))
                 .httpRequest()
-            let response = try await requestHandler(request)
+            let response = try await bridge.request(request)
             let data = try JSONEncoder().encode(response)
             resolveRequest(
                 requestID,
@@ -645,6 +651,18 @@ public actor JSPluginRuntime {
                         pendingRequests[id] = { resolve: resolve, reject: reject };
                         __nativeRequest(JSON.stringify(request), id);
                     });
+                },
+                setTimeout: function (callback, ms) {
+                    return __nativeSetTimeout(ms, callback);
+                },
+                clearTimeout: function (id) {
+                    __nativeClearTimeout(id);
+                },
+                setInterval: function (callback, ms) {
+                    return __nativeSetInterval(ms, callback);
+                },
+                clearInterval: function (id) {
+                    __nativeClearTimeout(id);
                 },
                 parseHTML: function (html) {
                     return makeNode(__nativeParseHTML(String(html)), true);
