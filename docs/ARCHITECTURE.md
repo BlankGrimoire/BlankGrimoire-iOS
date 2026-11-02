@@ -76,14 +76,14 @@ sequenceDiagram
   participant TS as ThemeSource
   participant RT as JSPluginRuntime (actor)
   participant JS as runtime.js + adapter
-  participant HTTP as PluginHTTPClient
+  participant HTTP as PluginRequestHandler
   VM->>TS: chapters(for:)
-  TS->>RT: invoke("getChapters", [context, key])
-  RT->>JS: __invoke(method, argsJSON)
-  JS->>RT: __native.request(json)
-  RT->>HTTP: perform(request) after allowlist check
+  TS->>RT: chapters(for:in:)
+  RT->>JS: BlankGrimoireRuntime.dispatch(options, method, argsJSON)
+  JS->>RT: __native.parseHTML(html) / __native.request(json)
+  RT->>HTTP: perform(request) after native policy checks
   HTTP-->>RT: response
-  RT-->>JS: resolve(json)
+  RT-->>JS: DocumentLike / resolved request JSON
   JS-->>RT: JSON.stringify(result)
   RT-->>TS: decoded DTO
   TS-->>VM: [Chapter]
@@ -91,19 +91,27 @@ sequenceDiagram
 
 Rules:
 
-- **JSON is the only exchange format.** JS returns `JSON.stringify(result)`;
-  Swift decodes it into DTOs, then maps DTOs to domain entities.
+- **JSON is the only exchange format.** Adapters return
+  `JSON.stringify(result)`; `dispatch` resolves to a JSON string, which Swift
+  decodes into DTOs before mapping them to domain entities.
 - **Networking is native.** Adapters never access the network directly: every
-  request goes through `__native.request` and the per-site host allowlist.
-- **HTML parsing is native.** `__native.parseHTML` exposes SwiftSoup to the
-  declarative engine.
+  request goes through `__native.request`, which resolves through an injected
+  `PluginRequestHandler`. The handler enforces the per-site host allowlist and
+  redirect policy (IOS-3).
+- **HTML parsing is native.** `__native.parseHTML` exposes SwiftSoup through
+  the `DocumentLike` bridge in `PluginDocumentStore`. Element and document
+  handles stay inside the runtime; no DOM object crosses the actor boundary.
+- **Load order matters.** The adapter bundle is evaluated first and its
+  `BlankGrimoireRuntime` global is captured; the vendored SDK `runtime.js` is
+  evaluated afterwards and must expose `__apiVersion == 1` and `dispatch`.
 - `runtime.js` (prelude and declarative engine) is **built in the SDK** and
   vendored here at a pinned version (`.sdk-version`).
 
 ## Contract versioning
 
 - The adapter `apiVersion` equals the SDK major version.
-- The app declares a supported `apiVersion` range and rejects incompatible bundles.
+- The app supports API version `1` (`ContractVersion.current`) and rejects
+  incompatible adapter bundles and manifest mismatches at load time.
 - `ContractTests` decode the canonical fixtures published by the SDK, so any
   contract drift fails CI.
 
@@ -112,18 +120,19 @@ Rules:
 | Component | Isolation |
 |---|---|
 | Views and view models | `@MainActor` |
-| `JSPluginRuntime` | One `actor` per adapter, with a custom `DispatchSerialQueue` executor that owns the `JSContext` |
+| `JSPluginRuntime` | One `actor` per adapter; each instance owns a `JSVirtualMachine` and `JSContext`, serialized by actor isolation |
 | `ThemeDetector` | `actor`, scoring adapters in parallel with a `TaskGroup` |
 | `ImagePipeline` | `actor`, with deduplicated in-flight downloads and bounded concurrency |
 | Challenge view (WKWebView) | `@MainActor` |
 
-`JSValue` never leaves the runtime executor.
+`JSValue` never leaves the runtime actor.
 
 ## Persistence
 
-SwiftData models: `LibraryEntry`, `ChapterProgress`, `SiteProfile` and
-`InstalledAdapter`. Repositories expose domain types only, never `@Model`
-objects, to the `Features` layer. iCloud sync via CloudKit is planned.
+SwiftData models: `MangaEntity`, `ChapterEntity`, `PageEntity`,
+`ReadingProgressEntity` and `BookmarkEntity`. Repositories expose domain types
+only, never `@Model` objects, to the `Features` layer. DTO → entity mapping lives
+in `PluginEngine/DTOMapping.swift`. iCloud sync via CloudKit is planned.
 
 ## Security model
 

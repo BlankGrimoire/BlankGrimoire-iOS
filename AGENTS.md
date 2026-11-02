@@ -41,14 +41,48 @@ Swift 6 strict concurrency; `swift format`; no force unwraps, `try!`, or IUOs ou
 
 | Task | Command |
 |------|---------|
-| Generate Xcode project | `xcodegen generate` |
-| Package tests | `swift test --package-path Packages/ReaderCore` |
+| Generate Xcode project | `make gen` |
+| Package tests | `make test-readercore` |
 | App build (CI-equivalent) | `xcodebuild build -scheme <APP_SCHEME> -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO` |
-| Sync SDK (local) | `make sync-sdk SDK_PATH=../BlankGrimoire-sdk` |
-| Sync SDK (release) | `make sync-sdk` (uses `.sdk-version`) |
-| Format / lint | `swift format lint --recursive .` |
+| Sync SDK (local) | `make sync-sdk SDK_REPO_PATH=../BlankGrimoire-sdk` |
+| Sync SDK (release) | `make sync-sdk-release` (uses `.sdk-version`) |
+| Format / lint | `make lint` |
 
-> Replace `<APP_SCHEME>` with the scheme name defined in `project.yml`. If `project.yml` does not exist yet (before IOS-0), leave the placeholder and note it in the report.
+> Replace `<APP_SCHEME>` with the scheme name defined in `project.yml` (`BlankGrimoire` in this repository).
+
+## Local test troubleshooting on macOS
+
+This checkout may live under `~/Documents` (iCloud Drive). SwiftPM's default
+`Packages/ReaderCore/.build` then receives `com.apple.fileprovider.*` and
+`com.apple.FinderInfo` extended attributes. `codesign` fails with:
+
+```text
+ReaderCore_ReaderCoreTests.bundle: resource fork, Finder information, or similar detritus not allowed
+```
+
+This is **not** a SwiftPM limitation and the tests are **not** CI-only. It is a
+local xattr problem. `make test-readercore` already builds with a scratch path
+outside iCloud (`~/Library/Caches/BlankGrimoire/ReaderCoreBuild`). Use it as-is,
+or override the path:
+
+```bash
+READERCORE_SCRATCH=/path/outside/iCloud make test-readercore
+```
+
+Do not report ReaderCore tests as blocked, skipped or "known failing" until you
+have run `make test-readercore` and pasted the real failure. `xattr -cr` on
+`.build` is only a fallback: it can fail on read-only dependency checkouts and
+does not stop iCloud from re-adding the attributes.
+
+Canonical verification for every iOS phase:
+
+```bash
+make gen
+make lint
+make test-readercore
+xcodebuild build -project BlankGrimoire.xcodeproj -scheme BlankGrimoire \
+  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+```
 
 ## Before Every Commit
 

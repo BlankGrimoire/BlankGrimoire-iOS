@@ -5,6 +5,10 @@ SDK_REPO_PATH ?= ../BlankGrimoire-sdk
 SDK_VERSION_FILE = .sdk-version
 SDK_RELEASE_URL = https://github.com/BlankGrimoire/BlankGrimoire-sdk/releases/download
 
+# Vendored SDK assets
+RUNTIME_JS = Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources/runtime.js
+TEST_FIXTURES = Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures
+
 # Project
 PROJECT_YML = project.yml
 XCODE_PROJECT = BlankGrimoire.xcodeproj
@@ -14,6 +18,11 @@ SWIFT_FORMAT = swift format
 SWIFT_FORMAT_CONFIG = .swift-format
 SWIFT_TEST = swift test
 SWIFT_TEST_FLAGS ?=
+
+# Build ReaderCore tests outside iCloud by default. macOS attaches
+# com.apple.fileprovider.* / FinderInfo xattrs to directories under
+# ~/Documents, which makes codesign fail on the test resource bundle.
+READERCORE_SCRATCH ?= $(HOME)/Library/Caches/BlankGrimoire/ReaderCoreBuild
 
 # XcodeGen
 XCODEGEN = xcodegen
@@ -29,13 +38,13 @@ YELLOW = \033[1;33m
 RED = \033[0;31m
 NC = \033[0m
 
-.PHONY: help generate build test format lint sync-sdk clean
+.PHONY: help gen generate build test format lint sync-sdk sync-sdk-release clean clean-xattrs test-readercore
 
 help:
 	@echo "$(GREEN)BlankGrimoire iOS Makefile$(NC)"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make generate      Generate Xcode project with xcodegen"
+	@echo "  make gen           Generate Xcode project with xcodegen (alias: generate)"
 	@echo "  make build         Build app for simulator"
 	@echo "  make test          Run unit tests"
 	@echo "  make format        Format code with swift-format"
@@ -48,9 +57,12 @@ help:
 	@echo "  SDK_REPO_PATH      Path to SDK repo (default: ../BlankGrimoire-sdk)"
 	@echo "  SCHEME             Xcode scheme (default: BlankGrimoire)"
 	@echo "  DESTINATION        Simulator destination (default: iPhone 17)"
-	@echo "  SWIFT_TEST_FLAGS   Extra flags for swift test (e.g. --scratch-path)"
+	@echo "  SWIFT_TEST_FLAGS   Extra flags for swift test"
+	@echo "  READERCORE_SCRATCH SwiftPM scratch path (default: ~/Library/Caches/BlankGrimoire/ReaderCoreBuild)"
 
 generate: $(XCODE_PROJECT)
+
+gen: generate
 
 $(XCODE_PROJECT): $(PROJECT_YML) Packages/ReaderCore/Package.swift
 	@echo "$(GREEN)Generating Xcode project...$(NC)"
@@ -91,23 +103,14 @@ sync-sdk:
 	@SDK_VERSION=$$(cat $(SDK_REPO_PATH)/package.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/'); \
 	echo "$$SDK_VERSION" > $(SDK_VERSION_FILE); \
 	echo "$(GREEN)SDK version: $$SDK_VERSION$(NC)"; \
-	\
-	# Copy runtime.js
-	mkdir -p BlankGrimoire/Resources/Runtime; \
-	cp $(SDK_REPO_PATH)/packages/runtime/dist/runtime.js BlankGrimoire/Resources/Runtime/runtime.js; \
-	echo "$(GREEN)Copied runtime.js$(NC)"; \
-	\
-	# Copy schema
-	cp $(SDK_REPO_PATH)/schema/v1.json BlankGrimoire/Resources/Contract/schema-v1.json; \
-	echo "$(GREEN)Copied schema-v1.json$(NC)"; \
-	\
-	# Copy fixtures
-	rm -rf BlankGrimoire/Resources/Contract/fixtures; \
-	mkdir -p BlankGrimoire/Resources/Contract/fixtures; \
-	cp -r $(SDK_REPO_PATH)/fixtures/v1 BlankGrimoire/Resources/Contract/fixtures/v1; \
-	echo "$(GREEN)Copied fixtures/v1/$(NC)"; \
-	\
-	@echo "$(GREEN)SDK sync complete! Version $$SDK_VERSION saved to $(SDK_VERSION_FILE)$(NC)"
+	mkdir -p Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources; \
+	cp $(SDK_REPO_PATH)/packages/runtime/dist/runtime.js $(RUNTIME_JS); \
+	echo "$(GREEN)Copied runtime.js to ReaderCore$(NC)"; \
+	rm -rf $(TEST_FIXTURES); \
+	mkdir -p $(TEST_FIXTURES); \
+	cp -r $(SDK_REPO_PATH)/fixtures/v1 $(TEST_FIXTURES)/v1; \
+	echo "$(GREEN)Copied fixtures/v1 to ReaderCore tests$(NC)"; \
+	echo "$(GREEN)SDK sync complete! Version $$SDK_VERSION saved to $(SDK_VERSION_FILE)$(NC)"
 
 sync-sdk-release:
 	@echo "$(GREEN)Syncing SDK from GitHub release...$(NC)"
@@ -117,40 +120,36 @@ sync-sdk-release:
 	fi
 	@SDK_VERSION=$$(cat $(SDK_VERSION_FILE)); \
 	echo "$(GREEN)SDK version from .sdk-version: $$SDK_VERSION$(NC)"; \
-	\
 	RELEASE_URL="$(SDK_RELEASE_URL)/v$$SDK_VERSION"; \
 	TEMP_DIR=$$(mktemp -d); \
-	\
 	echo "$(YELLOW)Downloading runtime.js...$(NC)"; \
 	curl -L "$$RELEASE_URL/runtime.js" -o "$$TEMP_DIR/runtime.js" || { echo "$(RED)Failed to download runtime.js$(NC)"; exit 1; }; \
-	mkdir -p BlankGrimoire/Resources/Runtime; \
-	cp "$$TEMP_DIR/runtime.js" BlankGrimoire/Resources/Runtime/runtime.js; \
-	\
-	echo "$(YELLOW)Downloading schema-v1.json...$(NC)"; \
-	curl -L "$$RELEASE_URL/schema-v1.json" -o "$$TEMP_DIR/schema-v1.json" || { echo "$(RED)Failed to download schema-v1.json$(NC)"; exit 1; }; \
-	mkdir -p BlankGrimoire/Resources/Contract; \
-	cp "$$TEMP_DIR/schema-v1.json" BlankGrimoire/Resources/Contract/schema-v1.json; \
-	\
+	mkdir -p Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources; \
+	cp "$$TEMP_DIR/runtime.js" $(RUNTIME_JS); \
 	echo "$(YELLOW)Downloading fixtures-v1.tar.gz...$(NC)"; \
 	curl -L "$$RELEASE_URL/fixtures-v1.tar.gz" -o "$$TEMP_DIR/fixtures-v1.tar.gz" || { echo "$(RED)Failed to download fixtures-v1.tar.gz$(NC)"; exit 1; }; \
-	rm -rf BlankGrimoire/Resources/Contract/fixtures; \
-	mkdir -p BlankGrimoire/Resources/Contract/fixtures; \
-	tar -xzf "$$TEMP_DIR/fixtures-v1.tar.gz" -C BlankGrimoire/Resources/Contract/fixtures; \
-	\
+	rm -rf $(TEST_FIXTURES); \
+	mkdir -p $(TEST_FIXTURES); \
+	tar -xzf "$$TEMP_DIR/fixtures-v1.tar.gz" -C $(TEST_FIXTURES); \
 	rm -rf "$$TEMP_DIR"; \
 	echo "$(GREEN)SDK release sync complete!$(NC)"
 
-# Strip extended attributes that cause code signing issues on macOS
+# Strip extended attributes that cause code signing issues on macOS. This is a
+# fallback for an existing in-repo .build; the supported fix is READERCORE_SCRATCH.
 clean-xattrs:
 	@echo "$(YELLOW)Cleaning extended attributes...$(NC)"
-	@find Packages/ReaderCore/.build -name "*.xctest" -exec xattr -cr {} \; 2>/dev/null || true
+	@find Packages/ReaderCore/.build \( -name "*.xctest" -o -name "*.bundle" \) \
+		-exec xattr -cr {} \; 2>/dev/null || true
 
-# ReaderCore package tests
-# Use SWIFT_TEST_FLAGS="--scratch-path /path/outside/iCloud" if macOS attaches
-# extended attributes to the build directory and code signing fails locally.
+# ReaderCore package tests. The scratch path defaults outside iCloud and can be
+# overridden with READERCORE_SCRATCH=/path. Do not use Packages/ReaderCore/.build
+# under ~/Documents: codesign fails with "resource fork, Finder information, or
+# similar detritus not allowed". That is a local xattr problem, not a CI-only
+# SwiftPM limitation.
 test-readercore: clean-xattrs
 	@echo "$(GREEN)Running ReaderCore package tests...$(NC)"
-	@cd Packages/ReaderCore && xattr -cr .build/out/Products/Debug/ReaderCoreTests.xctest 2>/dev/null || true; $(SWIFT_TEST) $(SWIFT_TEST_FLAGS)
+	@mkdir -p $(READERCORE_SCRATCH)
+	@cd Packages/ReaderCore && $(SWIFT_TEST) --scratch-path $(READERCORE_SCRATCH) $(SWIFT_TEST_FLAGS)
 
 # Clean
 clean:
@@ -158,8 +157,7 @@ clean:
 	rm -rf $(XCODE_PROJECT)
 	rm -rf .build
 	rm -rf DerivedData
-	rm -rf BlankGrimoire/Resources/Runtime
-	rm -rf BlankGrimoire/Resources/Contract
+	rm -rf BlankGrimoire/Resources
 
 # CI
 ci: generate test lint
