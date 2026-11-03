@@ -128,17 +128,20 @@ public enum SHA256Verifier {
 /// Represents a downloaded and verified adapter bundle.
 public struct AdapterBundle: Codable, Sendable {
     public let manifest: AdapterManifest
+    public let themeAdapter: ThemeAdapter
     public let bundleData: Data
     public let sourceRepositoryURL: String
     public let installedAt: Date
 
     public init(
         manifest: AdapterManifest,
+        themeAdapter: ThemeAdapter,
         bundleData: Data,
         sourceRepositoryURL: String,
         installedAt: Date = Date()
     ) {
         self.manifest = manifest
+        self.themeAdapter = themeAdapter
         self.bundleData = bundleData
         self.sourceRepositoryURL = sourceRepositoryURL
         self.installedAt = installedAt
@@ -182,8 +185,7 @@ public struct TrustedRepository: Codable, Sendable, Equatable {
 // MARK: - Adapter Store Protocol
 
 /// Protocol for adapter store operations.
-@MainActor
-public protocol AdapterStore {
+public protocol AdapterStore: Sendable {
     /// Fetches and verifies a repository index.
     func fetchRepositoryIndex(from url: String) async throws -> RepositoryIndex
 
@@ -394,8 +396,16 @@ public final class DefaultAdapterStore: AdapterStore {
         }
 
         // 9. Store bundle
+        let themeAdapter = ThemeAdapter(
+            id: manifest.id,
+            name: manifest.name,
+            version: manifest.version,
+            detectionSignature: manifest.detectionSignature,
+            selectors: try extractSelectors(from: bundleData)
+        )
         let bundle = AdapterBundle(
             manifest: manifest,
+            themeAdapter: themeAdapter,
             bundleData: bundleData,
             sourceRepositoryURL: repositoryURL
         )
@@ -517,6 +527,35 @@ public final class DefaultAdapterStore: AdapterStore {
 
         throw AdapterStoreError.bundleVerificationFailed("Could not extract manifest from bundle")
     }
+
+    private func extractSelectors(from bundleData: Data) throws -> ThemeSelectors {
+        let bundleString = String(decoding: bundleData, as: UTF8.self)
+
+        // Look for the selectors object in the bundle
+        // Pattern: "selectors": { ... }
+        let pattern = #""selectors"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})"#
+        let regex = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
+        let range = NSRange(location: 0, length: bundleString.utf16.count)
+
+        if let match = regex.firstMatch(in: bundleString, options: [], range: range),
+            let selectorsRange = Range(match.range(at: 1), in: bundleString)
+        {
+            let selectorsJSON = String(bundleString[selectorsRange])
+            let selectorsData = Data(selectorsJSON.utf8)
+            return try JSONDecoder().decode(ThemeSelectors.self, from: selectorsData)
+        }
+
+        // Fallback: return minimal selectors for testing
+        return ThemeSelectors(
+            search: .init(path: "", item: "", title: "", link: ""),
+            details: .init(
+                title: "", cover: nil, synopsis: nil, authors: nil, artists: nil, altTitles: nil, tags: nil,
+                status: nil, contentRating: nil),
+            chapters: .init(item: "", link: "", title: nil, date: nil, order: "desc"),
+            pages: .init(strategies: []),
+            attribution: nil
+        )
+    }
 }
 
 // MARK: - SwiftData Entities
@@ -558,6 +597,7 @@ public final class InstalledAdapterEntity {
     public var version: String
     public var apiVersion: Int
     public var detectionSignature: ThemeSignature
+    public var themeSelectors: ThemeSelectors
     public var sha256: String
     public var bundleData: Data
     public var sourceRepositoryURL: String
@@ -565,10 +605,11 @@ public final class InstalledAdapterEntity {
 
     public init(bundle: AdapterBundle) {
         self.id = bundle.id
-        self.name = bundle.manifest.name
-        self.version = bundle.manifest.version
+        self.name = bundle.themeAdapter.name
+        self.version = bundle.themeAdapter.version
         self.apiVersion = bundle.manifest.apiVersion
-        self.detectionSignature = bundle.manifest.detectionSignature
+        self.detectionSignature = bundle.themeAdapter.detectionSignature
+        self.themeSelectors = bundle.themeAdapter.selectors
         self.sha256 = bundle.manifest.sha256
         self.bundleData = bundle.bundleData
         self.sourceRepositoryURL = bundle.sourceRepositoryURL
@@ -584,8 +625,16 @@ public final class InstalledAdapterEntity {
             detectionSignature: detectionSignature,
             sha256: sha256
         )
+        let themeAdapter = ThemeAdapter(
+            id: id,
+            name: name,
+            version: version,
+            detectionSignature: detectionSignature,
+            selectors: themeSelectors
+        )
         return AdapterBundle(
             manifest: manifest,
+            themeAdapter: themeAdapter,
             bundleData: bundleData,
             sourceRepositoryURL: sourceRepositoryURL,
             installedAt: installedAt
@@ -598,7 +647,7 @@ public final class InstalledAdapterEntity {
 #if DEBUG
     extension DefaultAdapterStore {
         /// Creates an in-memory adapter store for testing.
-        static func createInMemory(
+        public static func createInMemory(
             requestHandler: PluginRequestHandler? = nil
         ) throws -> DefaultAdapterStore {
             let schema = Schema([
@@ -626,6 +675,18 @@ public final class InstalledAdapterEntity {
                 modelContainer: container,
                 requestHandler: handler
             )
+        }
+
+        /// Test helper: directly inserts an installed adapter entity.
+        public func insertInstalledAdapterForTesting(_ entity: InstalledAdapterEntity) async throws {
+            modelContext.insert(entity)
+            try modelContext.save()
+        }
+
+        /// Test helper: directly inserts a trusted repository entity.
+        public func insertTrustedRepositoryForTesting(_ entity: TrustedRepositoryEntity) async throws {
+            modelContext.insert(entity)
+            try modelContext.save()
         }
     }
 #endif
