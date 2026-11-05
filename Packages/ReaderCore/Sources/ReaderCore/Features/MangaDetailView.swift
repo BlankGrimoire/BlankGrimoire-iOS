@@ -97,6 +97,7 @@
                                     .font(Typography.caption1)
                                     .foregroundStyle(.tertiary)
                             }
+
                         }
 
                         if progress > 0 {
@@ -128,12 +129,18 @@
         }
     }
 
+    private struct ReaderRoute: Identifiable {
+        let chapter: ChapterEntity
+        var id: String { chapter.id }
+    }
+
     /// Manga detail view showing full information and chapters
     public struct MangaDetailView: View {
         let manga: MangaEntity
         let dependencies: FeaturesDependencies
 
         @State private var viewModel: MangaDetailViewModel
+        @State private var readerRoute: ReaderRoute?
         @Environment(\.dismiss) private var dismiss
 
         public init(manga: MangaEntity, dependencies: FeaturesDependencies) {
@@ -334,7 +341,7 @@
                                 isDownloaded: chapter.isDownloaded,
                                 progress: chapter.readingProgressEntries.first?.progress ?? 0
                             ) {
-                                Task { await viewModel.readChapter(chapter) }
+                                readerRoute = ReaderRoute(chapter: chapter)
                             }
                         }
                     }
@@ -400,6 +407,11 @@
             }
             .task {
                 await viewModel.loadChapters()
+            }
+            .sheet(item: $readerRoute) { route in
+                NavigationStack {
+                    ReaderView(manga: manga, chapter: route.chapter, dependencies: dependencies)
+                }
             }
             .alert(
                 "Error",

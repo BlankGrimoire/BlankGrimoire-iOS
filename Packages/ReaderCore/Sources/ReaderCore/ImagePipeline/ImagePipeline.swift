@@ -142,15 +142,18 @@ public actor ImagePipeline {
 
     /// Fetches an image from a URL.
     ///
-    /// Deduplicates concurrent requests for the same URL.
-    /// Returns cached data immediately if available.
+    /// Deduplicates concurrent requests for the same URL. Requests with custom
+    /// headers use a separate cache entry so credentialed pages never reuse the
+    /// bytes cached for an unauthenticated request.
     ///
     /// - Parameters:
     ///   - url: The image URL to fetch.
+    ///   - headers: Optional per-request headers (for example `Referer`).
     ///   - progress: Optional progress callback.
     /// - Returns: The image result.
     public func fetch(
         _ url: String,
+        headers: [String: String]? = nil,
         progress: ImageProgressCallback? = nil
     ) async throws -> ImageResult {
         // Validate URL
@@ -158,8 +161,10 @@ public actor ImagePipeline {
             throw ImagePipelineError.invalidURL(url)
         }
 
+        let cacheKey = cacheKey(for: url, headers: headers)
+
         // Check cache first
-        if let cachedData = await cache.data(for: url.absoluteString) {
+        if let cachedData = await cache.data(for: cacheKey) {
             logger.log("Cache hit: \(url.absoluteString)", level: .debug)
             return ImageResult(
                 data: cachedData,
@@ -170,18 +175,18 @@ public actor ImagePipeline {
         }
 
         // Check if request is already in flight
-        if let existing = inFlight[url.absoluteString] {
+        if let existing = inFlight[cacheKey] {
             logger.log("Deduplicating request: \(url.absoluteString)", level: .debug)
             return try await existing.task.value
         }
 
         // Create new request
         let task = Task {
-            try await downloadAndCache(url, progress: progress)
+            try await downloadAndCache(url, headers: headers, cacheKey: cacheKey, progress: progress)
         }
 
-        inFlight[url.absoluteString] = InFlightRequest(task: task)
-        defer { inFlight.removeValue(forKey: url.absoluteString) }
+        inFlight[cacheKey] = InFlightRequest(task: task)
+        defer { inFlight.removeValue(forKey: cacheKey) }
 
         return try await task.value
     }
@@ -189,12 +194,13 @@ public actor ImagePipeline {
     /// Fetches an image with a completion callback (for backward compatibility).
     public func fetch(
         _ url: String,
+        headers: [String: String]? = nil,
         progress: ImageProgressCallback? = nil,
         completion: @escaping ImageCompletionCallback
     ) {
         Task {
             do {
-                let result = try await fetch(url, progress: progress)
+                let result = try await fetch(url, headers: headers, progress: progress)
                 completion(.success(result))
             } catch {
                 completion(.failure(error))
@@ -209,19 +215,21 @@ public actor ImagePipeline {
     ///
     /// - Parameters:
     ///   - urls: URLs to prefetch.
+    ///   - headers: Optional headers keyed by URL.
     ///   - priority: Task priority.
-    ///   - completion: Called when all prefetches complete.
     public func prefetch(
         _ urls: [String],
+        headers: [String: [String: String]] = [:],
         priority: TaskPriority = .background
     ) async -> [String: Result<ImageResult, Error>] {
         var results: [String: Result<ImageResult, Error>] = [:]
 
         await withTaskGroup(of: (String, Result<ImageResult, Error>).self) { group in
             for url in urls {
+                let urlHeaders = headers[url]
                 group.addTask(priority: priority) {
                     do {
-                        let result = try await self.fetch(url)
+                        let result = try await self.fetch(url, headers: urlHeaders)
                         return (url, .success(result))
                     } catch {
                         return (url, .failure(error))
@@ -280,12 +288,20 @@ public actor ImagePipeline {
 
     // MARK: - Private
 
-    private func downloadAndCache(_ url: URL, progress: ImageProgressCallback?) async throws -> ImageResult {
+    private func downloadAndCache(
+        _ url: URL,
+        headers: [String: String]?,
+        cacheKey: String,
+        progress: ImageProgressCallback?
+    ) async throws -> ImageResult {
         await semaphore.wait()
         defer { semaphore.signal() }
 
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        for (field, value) in headers ?? [:] {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
 
         logger.log("Downloading: \(url.absoluteString)", level: .info)
 
@@ -303,7 +319,7 @@ public actor ImagePipeline {
         let mimeType = httpResponse.mimeType
 
         // Cache the result
-        await cache.setData(data, for: url.absoluteString)
+        await cache.setData(data, for: cacheKey)
 
         logger.log("Downloaded: \(url.absoluteString) (\(data.count) bytes)", level: .info)
 
@@ -313,6 +329,26 @@ public actor ImagePipeline {
             fromCache: false,
             originalURL: url.absoluteString
         )
+    }
+
+    /// Cache keys include a stable hash of the custom headers.
+    ///
+    /// The URL alone would allow a credentialed request to serve its bytes to
+    /// an unauthenticated one (and vice versa).
+    private func cacheKey(for url: URL, headers: [String: String]?) -> String {
+        guard let headers, !headers.isEmpty else {
+            return url.absoluteString
+        }
+
+        let canonical =
+            headers
+            .map { "\($0.key.lowercased()):\($0.value)" }
+            .sorted()
+            .joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(canonical.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "\(url.absoluteString)#\(digest)"
     }
 
     // MARK: - Private properties
