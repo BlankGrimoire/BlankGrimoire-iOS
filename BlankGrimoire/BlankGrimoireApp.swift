@@ -44,6 +44,8 @@ struct BlankGrimoireApp: App {
             self.dependencies = FeaturesDependencies(
                 mangaRepository: persistence.mangas,
                 chapterRepository: persistence.chapters,
+                pageRepository: persistence.pages,
+                readingProgressRepository: persistence.readingProgress,
                 siteProfileRepository: persistence.siteProfiles,
                 themeSource: LocalThemeSource(adapterStore: adapterStore),
                 themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),

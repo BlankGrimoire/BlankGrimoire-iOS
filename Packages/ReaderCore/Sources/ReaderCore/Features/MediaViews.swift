@@ -12,6 +12,7 @@
     struct CachedAsyncImage: View {
         let url: String?
         let loader: (any ImageLoading)?
+        var headers: [String: String]? = nil
         var contentMode: ContentMode = .fill
         var placeholderIcon: String = "book.closed"
 
@@ -56,7 +57,7 @@
             defer { isLoading = false }
 
             do {
-                let data = try await loader.loadImageData(for: url)
+                let data = try await loader.loadImageData(for: url, headers: headers)
                 guard !Task.isCancelled else { return }
                 image = UIImage(data: data)
             } catch {

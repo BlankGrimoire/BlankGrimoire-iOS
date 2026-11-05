@@ -94,11 +94,39 @@ public final class MangaEntity {
         "\(siteProfileID)::\(key)"
     }
 
+    /// Returns the adapter key, removing the site-profile prefix when present.
+    ///
+    /// Adapters only understand their own keys, while the persisted identifier
+    /// may be scoped with `makeID(siteProfileID:key:)`.
+    public var adapterKey: String {
+        guard let siteProfileID else { return id }
+        let prefix = "\(siteProfileID)::"
+        guard id.hasPrefix(prefix) else { return id }
+        return String(id.dropFirst(prefix.count))
+    }
+
     public func updateLastRead(chapterId: String, pageIndex: Int, totalPages: Int) {
         self.lastReadAt = Date()
         self.lastReadChapterId = chapterId
         self.lastReadPageIndex = pageIndex
         self.readingProgress = totalPages > 0 ? Double(pageIndex) / Double(totalPages) : 0.0
+        self.updatedAt = Date()
+    }
+
+    /// Updates the exact reading position, treating the last page as completed.
+    ///
+    /// `pageIndex` is zero-based. The computed progress reaches `1.0` when the
+    /// reader persists the final page, so the library does not show a series as
+    /// still in progress after its last page.
+    public func updateReadingPosition(chapterId: String, pageIndex: Int, totalPages: Int) {
+        self.lastReadAt = Date()
+        self.lastReadChapterId = chapterId
+        self.lastReadPageIndex = pageIndex
+        if totalPages > 0 {
+            self.readingProgress = Double(min(pageIndex + 1, totalPages)) / Double(totalPages)
+        } else {
+            self.readingProgress = 0.0
+        }
         self.updatedAt = Date()
     }
 }

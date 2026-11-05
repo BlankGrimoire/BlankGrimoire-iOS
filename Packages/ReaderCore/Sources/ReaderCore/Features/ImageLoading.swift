@@ -8,7 +8,18 @@ import Foundation
 /// `ImagePipeline`; previews leave the dependency `nil` so they never touch the
 /// network.
 public protocol ImageLoading: Sendable {
-    func loadImageData(for url: String) async throws -> Data
+    /// Loads image data for a URL, optionally sending per-request headers.
+    ///
+    /// Reader pages may require headers such as `Referer`; covers and favicons
+    /// pass `nil`.
+    func loadImageData(for url: String, headers: [String: String]?) async throws -> Data
+}
+
+extension ImageLoading {
+    /// Convenience overload for requests without custom headers.
+    public func loadImageData(for url: String) async throws -> Data {
+        try await loadImageData(for: url, headers: nil)
+    }
 }
 
 /// `ImageLoading` implementation backed by a lazily created `ImagePipeline`.
@@ -26,8 +37,8 @@ public actor PipelineImageLoader: ImageLoading {
         self.configuration = configuration
     }
 
-    public func loadImageData(for url: String) async throws -> Data {
-        try await resolvedPipeline().fetch(url).data
+    public func loadImageData(for url: String, headers: [String: String]?) async throws -> Data {
+        try await resolvedPipeline().fetch(url, headers: headers).data
     }
 
     /// Clears the underlying memory and disk caches.

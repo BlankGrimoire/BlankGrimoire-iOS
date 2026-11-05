@@ -10,6 +10,8 @@ import Foundation
 public struct FeaturesDependencies {
     public let mangaRepository: any MangaRepository
     public let chapterRepository: any ChapterRepository
+    public let pageRepository: (any PageRepository)?
+    public let readingProgressRepository: (any ReadingProgressRepository)?
     public let siteProfileRepository: any SiteProfileRepository
     public let themeSource: any ThemeSource
     public let themeDetector: (any SiteThemeDetecting)?
@@ -18,6 +20,8 @@ public struct FeaturesDependencies {
     public init(
         mangaRepository: any MangaRepository,
         chapterRepository: any ChapterRepository,
+        pageRepository: (any PageRepository)? = nil,
+        readingProgressRepository: (any ReadingProgressRepository)? = nil,
         siteProfileRepository: any SiteProfileRepository,
         themeSource: any ThemeSource,
         themeDetector: (any SiteThemeDetecting)? = nil,
@@ -25,6 +29,8 @@ public struct FeaturesDependencies {
     ) {
         self.mangaRepository = mangaRepository
         self.chapterRepository = chapterRepository
+        self.pageRepository = pageRepository
+        self.readingProgressRepository = readingProgressRepository
         self.siteProfileRepository = siteProfileRepository
         self.themeSource = themeSource
         self.themeDetector = themeDetector
