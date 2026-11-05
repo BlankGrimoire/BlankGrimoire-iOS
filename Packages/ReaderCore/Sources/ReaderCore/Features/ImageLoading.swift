@@ -13,6 +13,7 @@ public protocol ImageLoading: Sendable {
     /// Reader pages may require headers such as `Referer`; covers and favicons
     /// pass `nil`.
     func loadImageData(for url: String, headers: [String: String]?) async throws -> Data
+    func clearCache() async
 }
 
 extension ImageLoading {

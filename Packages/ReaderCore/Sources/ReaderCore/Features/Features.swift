@@ -64,7 +64,7 @@
                 .tag(Tab.sites)
 
                 NavigationStack {
-                    SettingsView()
+                    SettingsView(dependencies: dependencies)
                 }
                 .tabItem {
                     Label(
@@ -79,10 +79,13 @@
 
     /// Settings view
     private struct SettingsView: View {
+        let dependencies: FeaturesDependencies
         @AppStorage("autoUpdate") private var autoUpdate: Bool = true
         @AppStorage("downloadOnWifiOnly") private var downloadOnWifiOnly: Bool = true
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @AppStorage("theme") private var theme: AppTheme = .system
+        @AppStorage("cookieHandling") private var cookieHandling: CookiePreference = .automatic
+        @State private var showingClearCacheConfirmation = false
 
         private var appVersion: String {
             Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
@@ -102,6 +105,31 @@
 
                 Section("Downloads") {
                     Toggle("Download on Wi-Fi only", isOn: $downloadOnWifiOnly)
+                }
+
+                Section("Network") {
+                    Picker("Cookie handling", selection: $cookieHandling) {
+                        ForEach(CookiePreference.allCases) { preference in
+                            Text(preference.rawValue).tag(preference)
+                        }
+                    }
+                }
+
+                Section("Storage") {
+                    Button("Clear image cache", systemImage: "trash") {
+                        showingClearCacheConfirmation = true
+                    }
+                }
+
+                Section("Adapters") {
+                    if let adapterStore = dependencies.adapterStore {
+                        NavigationLink("Repositories and adapters") {
+                            AdapterManagementView(store: adapterStore)
+                        }
+                    } else {
+                        Text("Adapter management is unavailable.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Appearance") {
@@ -129,6 +157,19 @@
                 }
             }
             .navigationTitle("Settings")
+            .confirmationDialog(
+                "Clear cached images?",
+                isPresented: $showingClearCacheConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Clear cache", role: .destructive) {
+                    guard let imageLoader = dependencies.imageLoader else { return }
+                    Task {
+                        await imageLoader.clearCache()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
         }
     }
 
@@ -146,6 +187,13 @@
         case system = "System"
         case light = "Light"
         case dark = "Dark"
+
+        var id: String { rawValue }
+    }
+
+    enum CookiePreference: String, CaseIterable, Identifiable {
+        case automatic = "Automatic"
+        case none = "Off"
 
         var id: String { rawValue }
     }

@@ -27,8 +27,8 @@ struct BlankGrimoireApp: App {
 
             let persistence = try SwiftDataPersistenceManager(container: container)
 
-            // The adapter repository allowlist will be made configurable in
-            // IOS-10. Until then, keep a restrictive placeholder policy.
+            // Repository requests derive a host-scoped policy from each
+            // user-approved HTTPS repository URL.
             let adapterRequestHandler = PluginRequestHandler(
                 policy: SiteNetworkPolicy(
                     baseURL: "https://example.org",
@@ -49,7 +49,8 @@ struct BlankGrimoireApp: App {
                 siteProfileRepository: persistence.siteProfiles,
                 themeSource: LocalThemeSource(adapterStore: adapterStore),
                 themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),
-                imageLoader: PipelineImageLoader()
+                imageLoader: PipelineImageLoader(),
+                adapterStore: adapterStore
             )
         } catch {
             fatalError("Unable to initialize BlankGrimoire: \(error)")

@@ -16,6 +16,7 @@ public struct FeaturesDependencies {
     public let themeSource: any ThemeSource
     public let themeDetector: (any SiteThemeDetecting)?
     public let imageLoader: (any ImageLoading)?
+    public let adapterStore: (any AdapterStore)?
 
     public init(
         mangaRepository: any MangaRepository,
@@ -25,7 +26,8 @@ public struct FeaturesDependencies {
         siteProfileRepository: any SiteProfileRepository,
         themeSource: any ThemeSource,
         themeDetector: (any SiteThemeDetecting)? = nil,
-        imageLoader: (any ImageLoading)? = nil
+        imageLoader: (any ImageLoading)? = nil,
+        adapterStore: (any AdapterStore)? = nil
     ) {
         self.mangaRepository = mangaRepository
         self.chapterRepository = chapterRepository
@@ -35,5 +37,6 @@ public struct FeaturesDependencies {
         self.themeSource = themeSource
         self.themeDetector = themeDetector
         self.imageLoader = imageLoader
+        self.adapterStore = adapterStore
     }
 }

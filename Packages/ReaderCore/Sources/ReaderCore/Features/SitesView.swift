@@ -45,7 +45,11 @@
                     Section {
                         ForEach(viewModel.siteProfiles) { profile in
                             NavigationLink {
-                                SiteDetailView(profile: profile, viewModel: viewModel)
+                                SiteDetailView(
+                                    profile: profile,
+                                    viewModel: viewModel,
+                                    imageLoader: dependencies.imageLoader
+                                )
                             } label: {
                                 SiteRowView(profile: profile, imageLoader: dependencies.imageLoader)
                             }
@@ -268,13 +272,16 @@
     private struct SiteDetailView: View {
         let profile: SiteProfile
         @Bindable var viewModel: SitesViewModel
+        let imageLoader: (any ImageLoading)?
 
         @State private var isEnabled: Bool
         @State private var automaticCookies: Bool
+        @State private var showingChallenge = false
 
-        init(profile: SiteProfile, viewModel: SitesViewModel) {
+        init(profile: SiteProfile, viewModel: SitesViewModel, imageLoader: (any ImageLoading)?) {
             self.profile = profile
             self.viewModel = viewModel
+            self.imageLoader = imageLoader
             self._isEnabled = State(initialValue: profile.isEnabled)
             self._automaticCookies = State(initialValue: profile.cookieHandling == .automatic)
         }
@@ -325,6 +332,20 @@
                         }
                 } header: {
                     Text("Settings")
+                }
+
+                Section("Verification") {
+                    if let url = URL(string: profile.baseURL) {
+                        Button("Open visible verification browser", systemImage: "safari") {
+                            showingChallenge = true
+                        }
+                        .sheet(isPresented: $showingChallenge) {
+                            ChallengeView(
+                                url: url,
+                                allowedHosts: Set([url.host?.lowercased()].compactMap { $0 })
+                            )
+                        }
+                    }
                 }
 
                 Section {
