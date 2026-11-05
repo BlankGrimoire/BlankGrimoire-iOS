@@ -376,7 +376,7 @@ public struct ThemeSelectors: Codable, Sendable, Equatable {
 }
 
 /// Extraction strategies
-public enum ExtractionStrategy: Codable, Sendable, Equatable {
+public enum ExtractionStrategy: Codable, Sendable, Equatable, Hashable {
     case css(CSSStrategy)
     case scriptJSON(ScriptJSONStrategy)
     case hydration(HydrationStrategy)
@@ -427,9 +427,22 @@ public enum ExtractionStrategy: Codable, Sendable, Equatable {
             try strategy.encode(to: encoder)
         }
     }
+
+    public var displayString: String {
+        switch self {
+        case .css(let s):
+            return "CSS: \(s.image) (\(s.srcAttributes.joined(separator: ", ")))"
+        case .scriptJSON(let s):
+            return "Script JSON: \(s.path) (base64: \(s.base64.map(String.init) ?? "nil"))"
+        case .hydration(let s):
+            return "Hydration: \(s.framework) (\(s.path ?? ""))"
+        case .ajax(let s):
+            return "AJAX: \(s.path) -> \(s.then.displayString)"
+        }
+    }
 }
 
-public struct CSSStrategy: Codable, Sendable, Equatable {
+public struct CSSStrategy: Codable, Sendable, Equatable, Hashable {
     public let kind: String
     public let image: String
     public let srcAttributes: [String]
@@ -455,7 +468,7 @@ public struct CSSStrategy: Codable, Sendable, Equatable {
     }
 }
 
-public struct ScriptJSONStrategy: Codable, Sendable, Equatable {
+public struct ScriptJSONStrategy: Codable, Sendable, Equatable, Hashable {
     public let kind: String
     public let pattern: String
     public let path: String
@@ -481,7 +494,7 @@ public struct ScriptJSONStrategy: Codable, Sendable, Equatable {
     }
 }
 
-public struct HydrationStrategy: Codable, Sendable, Equatable {
+public struct HydrationStrategy: Codable, Sendable, Equatable, Hashable {
     public let kind: String
     public let framework: String  // "next" | "nuxt"
     public let path: String?
@@ -504,7 +517,7 @@ public struct HydrationStrategy: Codable, Sendable, Equatable {
     }
 }
 
-public final class AjaxStrategy: Codable, Sendable, Equatable {
+public final class AjaxStrategy: Codable, Sendable, Equatable, Hashable {
     public let kind: String
     public let method: String  // "GET" | "POST"
     public let path: String
@@ -544,10 +557,17 @@ public final class AjaxStrategy: Codable, Sendable, Equatable {
     public static func == (lhs: AjaxStrategy, rhs: AjaxStrategy) -> Bool {
         return lhs.method == rhs.method && lhs.path == rhs.path && lhs.body == rhs.body && lhs.then == rhs.then
     }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(method)
+        hasher.combine(path)
+        hasher.combine(body)
+        hasher.combine(then)
+    }
 }
 
 /// Theme adapter
-public struct ThemeAdapter: Codable, Sendable, Equatable {
+public struct ThemeAdapter: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let name: String
     public let version: String

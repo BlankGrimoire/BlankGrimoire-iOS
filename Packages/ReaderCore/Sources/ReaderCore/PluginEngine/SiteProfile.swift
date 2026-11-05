@@ -5,40 +5,40 @@ import Foundation
 /// Represents a user-configured site with its associated theme and custom overrides.
 public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
     /// Unique identifier for this site profile.
-    public let id: String
+    public var id: String
 
     /// User-visible name for the site.
-    public let name: String
+    public var name: String
 
     /// Base URL of the site (e.g., "https://example.org").
-    public let baseURL: String
+    public var baseURL: String
 
     /// ID of the theme adapter to use for this site.
-    public let themeID: String
+    public var themeID: String
 
     /// Version of the theme adapter (optional; if nil, uses latest installed).
-    public let themeVersion: String?
+    public var themeVersion: String?
 
     /// Custom selector overrides for this specific site.
-    public let selectorOverrides: ThemeSelectorsOverrides
+    public var selectorOverrides: ThemeSelectorsOverrides
 
     /// Whether this site is enabled for browsing.
-    public let isEnabled: Bool
+    public var isEnabled: Bool
 
     /// Last time this site was accessed.
-    public let lastAccessedAt: Date?
+    public var lastAccessedAt: Date?
 
     /// Custom HTTP headers to send with requests to this site.
-    public let customHeaders: [String: String]
+    public var customHeaders: [String: String]
 
     /// Cookie handling policy for this site.
-    public let cookieHandling: CookieHandling
+    public var cookieHandling: CookieHandling
 
     /// Maximum redirects to follow for this site.
-    public let maxRedirects: Int
+    public var maxRedirects: Int
 
     /// Request timeout for this site.
-    public let timeout: TimeInterval
+    public var timeout: TimeInterval
 
     public init(
         id: String = UUID().uuidString,
@@ -106,31 +106,6 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
             timeout: timeout
         )
     }
-}
-
-/// Protocol for managing site profiles.
-@MainActor
-public protocol SiteProfileStore {
-    /// Saves a site profile.
-    func save(_ profile: SiteProfile) async throws
-
-    /// Fetches a site profile by ID.
-    func fetch(id: String) async throws -> SiteProfile?
-
-    /// Fetches a site profile by base URL.
-    func fetchByBaseURL(_ baseURL: String) async throws -> SiteProfile?
-
-    /// Lists all site profiles.
-    func listAll() async throws -> [SiteProfile]
-
-    /// Lists enabled site profiles.
-    func listEnabled() async throws -> [SiteProfile]
-
-    /// Deletes a site profile.
-    func delete(id: String) async throws
-
-    /// Updates the last accessed time for a site.
-    func touch(id: String) async throws
 }
 
 /// Errors for site profile operations.

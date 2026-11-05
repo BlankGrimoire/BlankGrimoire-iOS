@@ -161,7 +161,7 @@ public actor DiskImageCache: ImageCache {
     public static func create(directory: URL, maxSize: UInt64 = 200 * 1024 * 1024) async throws -> DiskImageCache {
         let cache = DiskImageCache(directory: directory, maxSize: maxSize)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try await cache.loadIndex()
+        await cache.loadIndex()
         return cache
     }
 
@@ -280,7 +280,6 @@ public actor DiskImageCache: ImageCache {
     }
 
     private func saveIndex() async {
-        let indexURL = directory.appendingPathComponent("index.json")
         let entries = Array(index.values)
         if let data = try? JSONEncoder().encode(entries) {
             try? data.write(to: directory.appendingPathComponent("index.json"), options: .atomic)

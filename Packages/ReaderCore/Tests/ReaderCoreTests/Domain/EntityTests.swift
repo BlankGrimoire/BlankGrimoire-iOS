@@ -242,18 +242,18 @@ final class DomainEntityTests: XCTestCase {
     // MARK: - Enum Tests
 
     func testMangaStatusDisplay() {
-        XCTAssertEqual(MangaStatus.ongoing.displayName, "In corso")
-        XCTAssertEqual(MangaStatus.completed.displayName, "Completato")
-        XCTAssertEqual(MangaStatus.hiatus.displayName, "In pausa")
-        XCTAssertEqual(MangaStatus.cancelled.displayName, "Interrotto")
-        XCTAssertEqual(MangaStatus.unknown.displayName, "Sconosciuto")
+        XCTAssertEqual(MangaStatus.ongoing.displayName, "Ongoing")
+        XCTAssertEqual(MangaStatus.completed.displayName, "Completed")
+        XCTAssertEqual(MangaStatus.hiatus.displayName, "On Hiatus")
+        XCTAssertEqual(MangaStatus.cancelled.displayName, "Cancelled")
+        XCTAssertEqual(MangaStatus.unknown.displayName, "Unknown")
     }
 
     func testContentRatingDisplay() {
-        XCTAssertEqual(ContentRating.safe.displayName, "Tutti")
-        XCTAssertEqual(ContentRating.suggestive.displayName, "Adolescenti")
-        XCTAssertEqual(ContentRating.mature.displayName, "Adulti")
-        XCTAssertEqual(ContentRating.unknown.displayName, "Sconosciuto")
+        XCTAssertEqual(ContentRating.safe.displayName, "Safe")
+        XCTAssertEqual(ContentRating.suggestive.displayName, "Suggestive")
+        XCTAssertEqual(ContentRating.mature.displayName, "Mature")
+        XCTAssertEqual(ContentRating.unknown.displayName, "Unknown")
     }
 
     // MARK: - Manga Extension Tests

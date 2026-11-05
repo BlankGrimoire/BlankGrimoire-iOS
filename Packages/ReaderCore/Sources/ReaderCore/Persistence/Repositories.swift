@@ -76,6 +76,16 @@ public protocol BookmarkRepository {
     func deleteAll(for mangaId: String) async throws
 }
 
+/// Protocol for site profile persistence operations
+@MainActor
+public protocol SiteProfileRepository {
+    func fetchAll() async throws -> [SiteProfile]
+    func fetch(id: String) async throws -> SiteProfile?
+    func fetchByBaseURL(_ baseURL: String) async throws -> SiteProfile?
+    func save(_ profile: SiteProfile) async throws
+    func delete(_ profile: SiteProfile) async throws
+}
+
 // MARK: - Composite Repository Protocol
 
 /// Main repository aggregator for all persistence operations
@@ -86,6 +96,7 @@ public protocol PersistenceManager {
     var pages: PageRepository { get }
     var readingProgress: ReadingProgressRepository { get }
     var bookmarks: BookmarkRepository { get }
+    var siteProfiles: SiteProfileRepository { get }
 
     func saveContext() async throws
     func rollback() async throws

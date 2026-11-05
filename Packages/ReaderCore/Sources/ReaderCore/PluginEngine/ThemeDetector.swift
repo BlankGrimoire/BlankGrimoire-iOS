@@ -63,7 +63,7 @@ public actor ThemeDetector {
     /// 3. Probing additional paths if needed
     /// 4. Returning the highest-scoring adapter above minScore
     public func detectTheme(for url: String) async throws -> ThemeDetectionResult {
-        guard let baseURL = URL(string: url), let host = baseURL.host else {
+        guard URL(string: url) != nil else {
             throw ThemeDetectorError.invalidHTML("Invalid URL: \(url)")
         }
 

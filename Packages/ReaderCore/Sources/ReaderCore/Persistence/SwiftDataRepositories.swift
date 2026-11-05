@@ -341,3 +341,58 @@ final class SwiftDataBookmarkRepository: BookmarkRepository {
         try coordinator.save()
     }
 }
+
+// MARK: - Site Profile Repository Implementation
+
+@MainActor
+final class SwiftDataSiteProfileRepository: SiteProfileRepository {
+    private let coordinator: PersistenceCoordinator
+
+    private var context: ModelContext { coordinator.context }
+
+    init(coordinator: PersistenceCoordinator) {
+        self.coordinator = coordinator
+    }
+
+    func fetchAll() async throws -> [SiteProfile] {
+        let descriptor = FetchDescriptor<SiteProfileEntity>(
+            sortBy: [SortDescriptor(\.name, order: .forward)]
+        )
+        return try context.fetch(descriptor).map(\.profile)
+    }
+
+    func fetch(id: String) async throws -> SiteProfile? {
+        try entity(id: id)?.profile
+    }
+
+    func fetchByBaseURL(_ baseURL: String) async throws -> SiteProfile? {
+        let descriptor = FetchDescriptor<SiteProfileEntity>(
+            predicate: #Predicate { $0.baseURL == baseURL }
+        )
+        return try context.fetch(descriptor).first?.profile
+    }
+
+    func save(_ profile: SiteProfile) async throws {
+        if let existing = try entity(id: profile.id) {
+            existing.apply(profile)
+        } else {
+            context.insert(SiteProfileEntity(profile: profile))
+        }
+        try coordinator.save()
+    }
+
+    func delete(_ profile: SiteProfile) async throws {
+        guard let existing = try entity(id: profile.id) else {
+            throw SiteProfileError.notFound(profile.id)
+        }
+        context.delete(existing)
+        try coordinator.save()
+    }
+
+    private func entity(id: String) throws -> SiteProfileEntity? {
+        let descriptor = FetchDescriptor<SiteProfileEntity>(
+            predicate: #Predicate { $0.id == id }
+        )
+        return try context.fetch(descriptor).first
+    }
+}

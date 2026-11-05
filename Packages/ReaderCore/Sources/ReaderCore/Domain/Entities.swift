@@ -25,6 +25,13 @@ public final class MangaEntity {
     public var updatedAt: Date
     public var isFavorite: Bool
 
+    // Source attribution
+    public var siteProfileID: String?
+    public var siteName: String?
+    public var siteURL: String?
+    public var siteLogoURL: String?
+    public var siteCredits: String?
+
     // Relationships
     @Relationship(deleteRule: .cascade, inverse: \ChapterEntity.manga) public var chapters: [ChapterEntity] = []
     @Relationship(deleteRule: .cascade, inverse: \BookmarkEntity.manga) public var bookmarks: [BookmarkEntity] = []
@@ -42,7 +49,12 @@ public final class MangaEntity {
         tags: [String] = [],
         status: MangaStatus = .unknown,
         contentRating: ContentRating = .unknown,
-        isFavorite: Bool = false
+        isFavorite: Bool = false,
+        siteProfileID: String? = nil,
+        siteName: String? = nil,
+        siteURL: String? = nil,
+        siteLogoURL: String? = nil,
+        siteCredits: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -61,6 +73,25 @@ public final class MangaEntity {
         self.createdAt = Date()
         self.updatedAt = Date()
         self.isFavorite = isFavorite
+        self.siteProfileID = siteProfileID
+        self.siteName = siteName
+        self.siteURL = siteURL
+        self.siteLogoURL = siteLogoURL
+        self.siteCredits = siteCredits
+    }
+
+    /// Source attribution derived from the stored site fields.
+    public var attribution: Attribution? {
+        guard let siteName, let siteURL else { return nil }
+        return Attribution(siteName: siteName, siteURL: siteURL, logoURL: siteLogoURL, credits: siteCredits)
+    }
+
+    /// Builds the stable identifier for a manga that belongs to a site profile.
+    ///
+    /// Adapter keys are only unique inside a single adapter, so the persisted
+    /// identifier must include the site profile to avoid collisions.
+    public static func makeID(siteProfileID: String, key: String) -> String {
+        "\(siteProfileID)::\(key)"
     }
 
     public func updateLastRead(chapterId: String, pageIndex: Int, totalPages: Int) {
@@ -241,11 +272,11 @@ public final class BookmarkEntity {
 extension MangaStatus {
     public var displayName: String {
         switch self {
-        case .ongoing: return "In corso"
-        case .completed: return "Completato"
-        case .hiatus: return "In pausa"
-        case .cancelled: return "Interrotto"
-        case .unknown: return "Sconosciuto"
+        case .ongoing: return "Ongoing"
+        case .completed: return "Completed"
+        case .hiatus: return "On Hiatus"
+        case .cancelled: return "Cancelled"
+        case .unknown: return "Unknown"
         }
     }
 }
@@ -253,10 +284,10 @@ extension MangaStatus {
 extension ContentRating {
     public var displayName: String {
         switch self {
-        case .safe: return "Tutti"
-        case .suggestive: return "Adolescenti"
-        case .mature: return "Adulti"
-        case .unknown: return "Sconosciuto"
+        case .safe: return "Safe"
+        case .suggestive: return "Suggestive"
+        case .mature: return "Mature"
+        case .unknown: return "Unknown"
         }
     }
 }
