@@ -48,6 +48,7 @@ public final class SwiftDataPersistenceManager: PersistenceManager {
     public let pages: PageRepository
     public let readingProgress: ReadingProgressRepository
     public let bookmarks: BookmarkRepository
+    public let siteProfiles: SiteProfileRepository
 
     private let coordinator: PersistenceCoordinator
 
@@ -61,6 +62,7 @@ public final class SwiftDataPersistenceManager: PersistenceManager {
         self.pages = SwiftDataPageRepository(coordinator: coordinator)
         self.readingProgress = SwiftDataReadingProgressRepository(coordinator: coordinator)
         self.bookmarks = SwiftDataBookmarkRepository(coordinator: coordinator)
+        self.siteProfiles = SwiftDataSiteProfileRepository(coordinator: coordinator)
     }
 
     public func saveContext() async throws {
@@ -104,6 +106,7 @@ public final class SwiftDataPersistenceManager: PersistenceManager {
                 PageEntity.self,
                 ReadingProgressEntity.self,
                 BookmarkEntity.self,
+                SiteProfileEntity.self,
             ])
 
             let configuration = ModelConfiguration(

@@ -146,7 +146,9 @@ public actor PluginRequestHandler {
         if policy.cookieHandling == .automatic {
             let cookies = cookieStorage.cookies(for: url) ?? []
             let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)
-            cookieHeader.forEach { urlRequest.setValue($1, forHTTPHeaderField: $0) }
+            for (field, value) in cookieHeader {
+                urlRequest.setValue(value, forHTTPHeaderField: field)
+            }
         }
 
         // 5. Perform request with redirect handling
@@ -162,7 +164,9 @@ public actor PluginRequestHandler {
             let responseURL = httpResponse.url
         {
             let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: responseURL)
-            cookies.forEach { cookieStorage.setCookie($0) }
+            for cookie in cookies {
+                cookieStorage.setCookie(cookie)
+            }
         }
 
         // 7. Build response
@@ -203,16 +207,22 @@ public actor PluginRequestHandler {
         }
     }
 
-    /// Matches a host against a pattern (supports wildcards).
+    /// Matches a host against a pattern (supports wildcards and subdomains).
+    ///
+    /// The comparison is case-insensitive. A plain host allows the host itself
+    /// and its subdomains, as required by the allowlist contract.
     private func matchHost(_ pattern: String, _ host: String) -> Bool {
+        let pattern = pattern.lowercased()
+        let host = host.lowercased()
+
         if pattern == host {
             return true
         }
         if pattern.hasPrefix("*.") {
             let suffix = String(pattern.dropFirst(2))
-            return host.hasSuffix(suffix) || host == suffix
+            return host.hasSuffix("." + suffix) || host == suffix
         }
-        return false
+        return host.hasSuffix("." + pattern)
     }
 
     /// Performs the request with manual redirect handling.
@@ -245,7 +255,9 @@ public actor PluginRequestHandler {
             if policy.cookieHandling == .automatic {
                 let cookies = cookieStorage.cookies(for: redirectURL) ?? []
                 let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)
-                cookieHeader.forEach { newRequest.setValue($1, forHTTPHeaderField: $0) }
+                for (field, value) in cookieHeader {
+                    newRequest.setValue(value, forHTTPHeaderField: field)
+                }
             }
 
             return try await performWithRedirectHandling(newRequest, redirectCount: redirectCount + 1)
@@ -417,12 +429,7 @@ public final class PluginBridge: @unchecked Sendable {
         self.policy = policy
         self.logger = logger
         self.customRequestHandler = customRequestHandler
-        if let customRequestHandler {
-            // Create a minimal request handler that won't be used
-            self.requestHandler = PluginRequestHandler(policy: policy, logger: logger)
-        } else {
-            self.requestHandler = PluginRequestHandler(policy: policy, logger: logger)
-        }
+        self.requestHandler = PluginRequestHandler(policy: policy, logger: logger)
         self.timerManager = NativeTimerManager()
     }
 
