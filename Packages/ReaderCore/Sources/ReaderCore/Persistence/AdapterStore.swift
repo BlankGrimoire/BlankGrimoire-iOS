@@ -220,6 +220,16 @@ public protocol AdapterStore: Sendable {
     func updateAdapter(id: String, to version: String) async throws -> AdapterBundle
 }
 
+extension AdapterStore {
+    /// Trusts an index while preserving the URL it was fetched from.
+    ///
+    /// The URL is part of the trust identity and must not be inferred from the
+    /// display name in the repository index.
+    public func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws {
+        try await trustRepository(index)
+    }
+}
+
 // MARK: - Adapter Store Implementation
 
 /// Default implementation of `AdapterStore` using SwiftData for persistence
@@ -228,7 +238,6 @@ public protocol AdapterStore: Sendable {
 public final class DefaultAdapterStore: AdapterStore {
     private let modelContainer: ModelContainer
     private let modelContext: ModelContext
-    private let requestHandler: PluginRequestHandler
     private let logger: PluginLogger
 
     public init(
@@ -238,8 +247,8 @@ public final class DefaultAdapterStore: AdapterStore {
     ) throws {
         self.modelContainer = modelContainer
         self.modelContext = modelContainer.mainContext
-        self.requestHandler = requestHandler
         self.logger = logger
+        _ = requestHandler
     }
 
     // MARK: - Repository Index
@@ -250,7 +259,7 @@ public final class DefaultAdapterStore: AdapterStore {
         }
 
         let request = HttpRequest(url: indexURL.absoluteString, method: "GET")
-        let response = try await requestHandler.perform(request)
+        let response = try await repositoryRequestHandler(for: indexURL.absoluteString).perform(request)
 
         guard response.status >= 200 && response.status < 300 else {
             throw AdapterStoreError.networkError("HTTP \(response.status): \(response.body)")
@@ -285,7 +294,7 @@ public final class DefaultAdapterStore: AdapterStore {
 
     public func trustRepository(_ index: RepositoryIndex) async throws {
         let trusted = TrustedRepository(
-            url: index.name,  // Use name as identifier; could also use URL
+            url: index.name,
             name: index.name,
             publicKey: index.publicKey
         )
@@ -295,6 +304,21 @@ public final class DefaultAdapterStore: AdapterStore {
         try modelContext.save()
 
         logger.log("Trusted repository: \(index.name)", level: 0, context: nil)
+    }
+
+    public func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws {
+        guard URL(string: repositoryURL)?.scheme?.lowercased() == "https" else {
+            throw AdapterStoreError.invalidRepositoryURL
+        }
+
+        let trusted = TrustedRepository(
+            url: repositoryURL,
+            name: index.name,
+            publicKey: index.publicKey
+        )
+        modelContext.insert(TrustedRepositoryEntity(trusted: trusted))
+        try modelContext.save()
+        logger.log("Trusted repository: \(repositoryURL)", level: 0, context: nil)
     }
 
     public func isRepositoryTrusted(_ url: String) async throws -> Bool {
@@ -351,7 +375,7 @@ public final class DefaultAdapterStore: AdapterStore {
         // 4. Download bundle
         let bundleURL = resolveBundleURL(entry.bundleURL, baseURL: repositoryURL)
         let request = HttpRequest(url: bundleURL, method: "GET")
-        let response = try await requestHandler.perform(request)
+        let response = try await repositoryRequestHandler(for: bundleURL).perform(request)
 
         guard response.status >= 200 && response.status < 300 else {
             throw AdapterStoreError.bundleDownloadFailed("HTTP \(response.status)")
@@ -485,6 +509,26 @@ public final class DefaultAdapterStore: AdapterStore {
     }
 
     // MARK: - Helpers
+
+    private func repositoryRequestHandler(for urlString: String) throws -> PluginRequestHandler {
+        guard
+            let url = URL(string: urlString),
+            url.scheme?.lowercased() == "https",
+            let host = url.host?.lowercased()
+        else {
+            throw AdapterStoreError.invalidRepositoryURL
+        }
+
+        return PluginRequestHandler(
+            policy: SiteNetworkPolicy(
+                baseURL: urlString,
+                allowedHosts: [host],
+                maxRedirects: 5,
+                cookieHandling: .none
+            ),
+            logger: ConsolePluginLogger()
+        )
+    }
 
     private func resolveBundleURL(_ bundleURL: String, baseURL: String) -> String {
         if bundleURL.hasPrefix("http://") || bundleURL.hasPrefix("https://") {
