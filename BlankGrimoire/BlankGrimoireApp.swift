@@ -40,6 +40,20 @@ struct BlankGrimoireApp: App {
                 requestHandler: adapterRequestHandler
             )
 
+            // Remote theme repository (GitHub Pages)
+            let themeRepositoryURL = "https://blankgrimoire.github.io/BlankGrimoire-themes/index.json"
+            let themeRequestHandler = PluginRequestHandler(
+                policy: SiteNetworkPolicy(
+                    baseURL: "https://blankgrimoire.github.io",
+                    allowedHosts: ["blankgrimoire.github.io"]
+                )
+            )
+            let remoteThemeSource = RemoteThemeSource(
+                repositoryURL: themeRepositoryURL,
+                requestHandler: themeRequestHandler
+            )
+            let localThemeSource = LocalThemeSource(adapterStore: adapterStore)
+
             // The catalog service searches every saved site through its
             // installed adapter, and the page provider loads chapter pages on
             // demand from the same adapter.
@@ -63,7 +77,7 @@ struct BlankGrimoireApp: App {
                 pageRepository: persistence.pages,
                 readingProgressRepository: persistence.readingProgress,
                 siteProfileRepository: persistence.siteProfiles,
-                themeSource: LocalThemeSource(adapterStore: adapterStore),
+                themeSource: CompositeThemeSource(sources: [localThemeSource, remoteThemeSource]),
                 themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),
                 imageLoader: PipelineImageLoader(),
                 adapterStore: adapterStore,

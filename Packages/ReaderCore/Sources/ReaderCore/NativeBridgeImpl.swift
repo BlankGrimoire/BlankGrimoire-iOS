@@ -4,7 +4,28 @@ import Foundation
 import SwiftSoup
 import WebKit
 
-// MARK: - Native Bridge Implementation
+// Timer handle manager to avoid capturing self in timer closures
+private final class TimerHandleManager: @unchecked Sendable {
+    private var timers: [Int: TimerHandle] = [:]
+    private let queue = DispatchQueue(label: "com.blankgrimoire.timer-manager")
+
+    func add(_ handle: TimerHandle, forKey key: Int) {
+        queue.async(flags: .barrier) { self.timers[key] = handle }
+    }
+
+    func removeValue(forKey key: Int) -> TimerHandle? {
+        queue.sync { self.timers.removeValue(forKey: key) }
+    }
+
+    func invalidateAll() {
+        queue.async(flags: .barrier) {
+            for (_, handle) in self.timers {
+                handle.invalidate()
+            }
+            self.timers.removeAll()
+        }
+    }
+}
 
 /// Thread-safe native bridge implementation
 public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
@@ -12,16 +33,17 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
     private var allowedHosts: Set<String> = []
     private let allowlistLock = NSLock()
 
-    // Document storage
-    private var documents: [String: Document] = [:]
+    // Document storage (store HTML strings to maintain Sendable conformance)
+    private var documentHTMLs: [String: String] = [:]
     private let documentQueue = DispatchQueue(label: "com.blankgrimoire.documents", attributes: .concurrent)
 
-    // Element storage
-    private var elements: [String: Element] = [:]
+    // Element storage (store outerHTML strings and attributes to maintain Sendable conformance)
+    private var elementHTMLs: [String: String] = [:]
+    private var elementAttributes: [String: [String: String]] = [:]
     private let elementQueue = DispatchQueue(label: "com.blankgrimoire.elements", attributes: .concurrent)
 
     // Timers
-    private var timers: [Int: TimerHandle] = [:]
+    private let timerManager = TimerHandleManager()
     private var timerCounter = 0
     private let timerQueue = DispatchQueue(label: "com.blankgrimoire.timers")
 
@@ -184,22 +206,24 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
         let document = try SwiftSoup.parse(html)
         let documentId = UUID().uuidString
 
+        // Store HTML string instead of Document to maintain Sendable conformance
         documentQueue.async(flags: .barrier) {
-            self.documents[documentId] = document
+            self.documentHTMLs[documentId] = html
         }
 
-        let title = try? document.title()
+        let title = try? SwiftSoup.parse(html).title()
         return ParsedDocument(documentId: documentId, title: title, url: "")
     }
 
     // MARK: - Document Selectors
 
     public func querySelector(documentId: String, selector: String) async throws -> ElementResult? {
-        let document = documentQueue.sync { documents[documentId] }
-        guard let document else {
+        let html = documentQueue.sync { documentHTMLs[documentId] }
+        guard let html else {
             throw BridgeError.documentNotFound(documentId)
         }
 
+        let document = try SwiftSoup.parse(html)
         guard let element = try document.select(selector).first() else {
             return nil
         }
@@ -208,11 +232,12 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
     }
 
     public func querySelectorAll(documentId: String, selector: String) async throws -> [ElementResult] {
-        let document = documentQueue.sync { documents[documentId] }
-        guard let document else {
+        let html = documentQueue.sync { documentHTMLs[documentId] }
+        guard let html else {
             throw BridgeError.documentNotFound(documentId)
         }
 
+        let document = try SwiftSoup.parse(html)
         let elements = try document.select(selector)
         var results: [ElementResult] = []
 
@@ -242,8 +267,10 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
             outerHTML: outerHTML
         )
 
+        // Store outerHTML string and attributes to maintain Sendable conformance
         elementQueue.async(flags: .barrier) {
-            self.elements[elementId] = element
+            self.elementHTMLs[elementId] = outerHTML
+            self.elementAttributes[elementId] = attributes
         }
 
         return result
@@ -273,30 +300,33 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
     }
 
     public func getAttribute(elementId: String, name: String) async throws -> String? {
-        let element = elementQueue.sync { elements[elementId] }
-        guard let element else {
+        let attributes = elementQueue.sync { elementAttributes[elementId] }
+        guard let attributes else {
             throw BridgeError.elementNotFound(elementId)
         }
-        return try element.attr(name)
+        return attributes[name]
     }
 
     public func getTextContent(elementId: String) async throws -> String? {
-        let element = elementQueue.sync { elements[elementId] }
-        guard let element else {
+        let outerHTML = elementQueue.sync { elementHTMLs[elementId] }
+        guard let outerHTML else {
             throw BridgeError.elementNotFound(elementId)
         }
+        let document = try SwiftSoup.parse(outerHTML)
+        let body = document.body()
+        let element = try body?.select("*").first() ?? document
         return try element.text()
     }
 
     public func releaseElement(_ elementId: String) {
         elementQueue.async(flags: .barrier) {
-            self.elements.removeValue(forKey: elementId)
+            self.elementHTMLs.removeValue(forKey: elementId)
         }
     }
 
     public func releaseDocument(_ documentId: String) {
         documentQueue.async(flags: .barrier) {
-            self.documents.removeValue(forKey: documentId)
+            self.documentHTMLs.removeValue(forKey: documentId)
         }
     }
 
@@ -324,51 +354,40 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
 
         let timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(ms) / 1000.0, repeats: false) { [weak self] _ in
             callback()
-            self?.timerQueue.async(flags: .barrier) {
-                self?.timers.removeValue(forKey: id)
-            }
+            self?.timerManager.removeValue(forKey: id)
         }
 
         let handle = TimerHandle(id: id, timer: timer)
-        timerQueue.async(flags: .barrier) {
-            self.timers[id] = handle
-        }
+        timerManager.add(handle, forKey: id)
 
         return id
     }
 
     public func clearTimeout(_ id: Int) {
-        timerQueue.async(flags: .barrier) {
-            if let handle = self.timers.removeValue(forKey: id) {
-                handle.invalidate()
-            }
+        if let handle = timerManager.removeValue(forKey: id) {
+            handle.invalidate()
         }
     }
 
     public func disposeTimers() {
-        timerQueue.async(flags: .barrier) {
-            for (_, handle) in self.timers {
-                handle.invalidate()
-            }
-            self.timers.removeAll()
-        }
+        timerManager.invalidateAll()
     }
 
     // MARK: - Scripts
 
     public func getScripts(documentId: String) async throws -> [String] {
-        let document = documentQueue.sync { documents[documentId] }
-        guard let document else {
+        let html = documentQueue.sync { documentHTMLs[documentId] }
+        guard let html else {
             throw BridgeError.documentNotFound(documentId)
         }
-
+        let document = try SwiftSoup.parse(html)
         let scripts = try document.select("script")
         return scripts.map { $0.data() }.filter { !$0.isEmpty }
     }
 
     // Allow external read access to documents for detection scoring
-    func getDocument(_ documentId: String) -> Document? {
-        documentQueue.sync { documents[documentId] }
+    func getDocumentHTML(_ documentId: String) -> String? {
+        documentQueue.sync { documentHTMLs[documentId] }
     }
 }
 
@@ -409,18 +428,19 @@ extension NativeBridgeImpl {
     /// Store a pre-parsed document (for testing)
     func storeDocument(_ document: Document, id: String? = nil) -> String {
         let documentId = id ?? UUID().uuidString
+        let html = (try? document.outerHtml()) ?? ""
         documentQueue.async(flags: .barrier) {
-            self.documents[documentId] = document
+            self.documentHTMLs[documentId] = html
         }
         return documentId
     }
 
     /// Get document count (for debugging)
     var documentCount: Int {
-        documentQueue.sync { documents.count }
+        documentQueue.sync { documentHTMLs.count }
     }
 
     var elementCount: Int {
-        elementQueue.sync { elements.count }
+        elementQueue.sync { elementHTMLs.count }
     }
 }
