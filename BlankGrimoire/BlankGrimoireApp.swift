@@ -40,6 +40,20 @@ struct BlankGrimoireApp: App {
                 requestHandler: adapterRequestHandler
             )
 
+            // Remote theme repository (GitHub Pages)
+            let themeRepositoryURL = "https://blankgrimoire.github.io/BlankGrimoire-themes/index.json"
+            let themeRequestHandler = PluginRequestHandler(
+                policy: SiteNetworkPolicy(
+                    baseURL: "https://blankgrimoire.github.io",
+                    allowedHosts: ["blankgrimoire.github.io"]
+                )
+            )
+            let remoteThemeSource = RemoteThemeSource(
+                repositoryURL: themeRepositoryURL,
+                requestHandler: themeRequestHandler
+            )
+            let localThemeSource = LocalThemeSource(adapterStore: adapterStore)
+
             self.container = container
             self.dependencies = FeaturesDependencies(
                 mangaRepository: persistence.mangas,
@@ -47,7 +61,7 @@ struct BlankGrimoireApp: App {
                 pageRepository: persistence.pages,
                 readingProgressRepository: persistence.readingProgress,
                 siteProfileRepository: persistence.siteProfiles,
-                themeSource: LocalThemeSource(adapterStore: adapterStore),
+                themeSource: CompositeThemeSource(sources: [localThemeSource, remoteThemeSource]),
                 themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),
                 imageLoader: PipelineImageLoader(),
                 adapterStore: adapterStore
