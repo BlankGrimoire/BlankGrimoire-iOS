@@ -211,7 +211,7 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
             self.documentHTMLs[documentId] = html
         }
 
-        let title = try? SwiftSoup.parse(html).title()
+        let title = try? document.title()
         return ParsedDocument(documentId: documentId, title: title, url: "")
     }
 
@@ -354,7 +354,7 @@ public final class NativeBridgeImpl: NativeBridge, @unchecked Sendable {
 
         let timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(ms) / 1000.0, repeats: false) { [weak self] _ in
             callback()
-            self?.timerManager.removeValue(forKey: id)
+            _ = self?.timerManager.removeValue(forKey: id)
         }
 
         let handle = TimerHandle(id: id, timer: timer)

@@ -7,6 +7,7 @@
     public struct ReaderView: View {
         private let dependencies: FeaturesDependencies
         @State private var viewModel: ReaderViewModel
+        @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @Environment(\.dismiss) private var dismiss
 
         public init(
@@ -66,6 +67,7 @@
                         }
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
+                    .environment(\.layoutDirection, readingDirection.layoutDirection)
                     .background(Color.black)
                 }
             }
@@ -106,6 +108,17 @@
                 }
             } message: {
                 Text(viewModel.lastError?.localizedDescription ?? "")
+            }
+        }
+    }
+
+    extension ReadingDirection {
+        var layoutDirection: LayoutDirection {
+            switch self {
+            case .vertical, .horizontalLeftToRight:
+                return .leftToRight
+            case .horizontalRightToLeft:
+                return .rightToLeft
             }
         }
     }
