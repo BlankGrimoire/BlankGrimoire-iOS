@@ -161,6 +161,14 @@ public final class SitesViewModel {
         await updateProfile(updated)
     }
 
+    /// Changes the adapter theme used by an existing site profile.
+    public func setTheme(_ themeID: String, for profile: SiteProfile) async {
+        var updated = profile
+        updated.themeID = themeID
+        updated.themeVersion = availableThemes.first(where: { $0.id == themeID })?.version
+        await updateProfile(updated)
+    }
+
     public func updateOverrides(
         _ overrides: ThemeSelectorsOverrides,
         for profile: SiteProfile

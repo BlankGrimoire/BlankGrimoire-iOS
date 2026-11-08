@@ -57,18 +57,25 @@ extension MangaDetails {
 extension Chapter {
     /// Builds a chapter entity, optionally attached to its manga.
     public func makeEntity(manga: MangaEntity? = nil, pageCount: Int = 0) -> ChapterEntity {
-        let entity = ChapterEntity(
-            id: key,
-            title: title,
-            number: number,
-            volume: volume,
-            language: language,
-            publishedAt: ContractDate.parse(publishedAt),
-            group: group,
-            pageCount: pageCount
-        )
-        entity.manga = manga
+        let entity = ChapterEntity(id: key, pageCount: pageCount)
+        apply(to: entity, manga: manga)
         return entity
+    }
+
+    /// Refreshes an existing chapter without discarding its local state.
+    ///
+    /// `pageCount`, download status and reading progress stay untouched.
+    public func apply(to entity: ChapterEntity, manga: MangaEntity? = nil) {
+        entity.title = title
+        entity.number = number
+        entity.volume = volume
+        entity.language = language
+        entity.publishedAt = ContractDate.parse(publishedAt)
+        entity.group = group
+        if let manga {
+            entity.manga = manga
+        }
+        entity.updatedAt = Date()
     }
 }
 

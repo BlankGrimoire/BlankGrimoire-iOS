@@ -28,7 +28,8 @@
                     chapter: chapter,
                     pageRepository: pageRepository,
                     readingProgressRepository: readingProgressRepository,
-                    mangaRepository: dependencies.mangaRepository
+                    mangaRepository: dependencies.mangaRepository,
+                    chapterPagesProvider: dependencies.chapterPagesProvider
                 )
             )
         }
@@ -90,7 +91,7 @@
                 await viewModel.load()
             }
             .alert(
-                "Unable to save reading progress",
+                "Reader Error",
                 isPresented: Binding(
                     get: { viewModel.lastError != nil },
                     set: { isPresented in

@@ -25,11 +25,11 @@ public enum AdapterStoreError: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidRepositoryURL:
-            return "Invalid repository URL"
+            return "Enter a full HTTPS repository index URL, for example https://example.org/index.json"
         case .networkError(let msg):
             return "Network error: \(msg)"
         case .invalidIndexFormat(let msg):
-            return "Invalid repository index format: \(msg)"
+            return "The repository did not return a valid index.json: \(msg)"
         case .publicKeyMismatch:
             return "Repository public key does not match trusted key"
         case .signatureVerificationFailed:
@@ -254,7 +254,7 @@ public final class DefaultAdapterStore: AdapterStore {
     // MARK: - Repository Index
 
     public func fetchRepositoryIndex(from url: String) async throws -> RepositoryIndex {
-        guard let indexURL = URL(string: url) else {
+        guard let indexURL = RepositoryURL.normalizedIndexURL(from: url) else {
             throw AdapterStoreError.invalidRepositoryURL
         }
 
@@ -307,18 +307,19 @@ public final class DefaultAdapterStore: AdapterStore {
     }
 
     public func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws {
-        guard URL(string: repositoryURL)?.scheme?.lowercased() == "https" else {
+        guard let indexURL = RepositoryURL.normalizedIndexURL(from: repositoryURL) else {
             throw AdapterStoreError.invalidRepositoryURL
         }
 
+        let canonicalURL = indexURL.absoluteString
         let trusted = TrustedRepository(
-            url: repositoryURL,
+            url: canonicalURL,
             name: index.name,
             publicKey: index.publicKey
         )
         modelContext.insert(TrustedRepositoryEntity(trusted: trusted))
         try modelContext.save()
-        logger.log("Trusted repository: \(repositoryURL)", level: 0, context: nil)
+        logger.log("Trusted repository: \(canonicalURL)", level: 0, context: nil)
     }
 
     public func isRepositoryTrusted(_ url: String) async throws -> Bool {

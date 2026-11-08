@@ -206,6 +206,77 @@
         func delete(_ profile: SiteProfile) async throws {}
     }
 
+    @MainActor
+    final class PreviewPageRepository: PageRepository {
+        func fetchByChapterId(_ chapterId: String) async throws -> [PageEntity] {
+            (0..<3).map { index in
+                PageEntity(
+                    index: index,
+                    imageURL: "https://example.org/pages/lorem-\(index + 1).jpg"
+                )
+            }
+        }
+        func fetchById(_ id: String) async throws -> PageEntity? { nil }
+        func fetchByChapterIdAndIndex(_ chapterId: String, index: Int) async throws -> PageEntity? { nil }
+        func save(_ page: PageEntity) async throws {}
+        func saveAll(_ pages: [PageEntity]) async throws {}
+        func delete(_ page: PageEntity) async throws {}
+        func deleteAll(for chapterId: String) async throws {}
+        func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
+    }
+
+    @MainActor
+    final class PreviewReadingProgressRepository: ReadingProgressRepository {
+        func fetchByMangaId(_ mangaId: String) async throws -> [ReadingProgressEntity] { [] }
+        func fetchByMangaIdAndChapterId(_ mangaId: String, chapterId: String) async throws
+            -> [ReadingProgressEntity]
+        { [] }
+        func fetchLatest(for mangaId: String) async throws -> ReadingProgressEntity? { nil }
+        func save(_ progress: ReadingProgressEntity) async throws {}
+        func delete(_ progress: ReadingProgressEntity) async throws {}
+        func deleteAll(for mangaId: String) async throws {}
+    }
+
+    @MainActor
+    final class PreviewCatalogService: SiteCatalogProviding {
+        func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
+            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return SiteSearchOutcome()
+            }
+            let results = profiles.map { profile in
+                SiteSearchResult(
+                    siteProfileID: profile.id,
+                    siteName: profile.name,
+                    siteURL: profile.baseURL,
+                    key: "\(profile.baseURL)/series/lorem-ipsum",
+                    title: "Lorem Ipsum",
+                    coverURL: "https://example.org/covers/lorem.jpg"
+                )
+            }
+            return SiteSearchOutcome(results: results)
+        }
+
+        func importManga(_ result: SiteSearchResult) async throws -> MangaEntity {
+            MangaEntity(
+                id: result.key,
+                title: result.title,
+                coverURL: result.coverURL,
+                siteProfileID: result.siteProfileID,
+                siteName: result.siteName,
+                siteURL: result.siteURL
+            )
+        }
+    }
+
+    @MainActor
+    final class PreviewChapterPagesProvider: ChapterPagesProviding {
+        func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity] {
+            (0..<3).map { index in
+                PageEntity(index: index, imageURL: "https://example.org/pages/lorem-\(index + 1).jpg")
+            }
+        }
+    }
+
     struct PreviewThemeSource: ThemeSource {
         func listThemes() async throws -> [ThemeAdapter] { ThemeAdapter.previewData }
         func getTheme(id: String) async throws -> ThemeAdapter? { nil }
@@ -228,9 +299,13 @@
             FeaturesDependencies(
                 mangaRepository: PreviewMangaRepository(),
                 chapterRepository: PreviewChapterRepository(),
+                pageRepository: PreviewPageRepository(),
+                readingProgressRepository: PreviewReadingProgressRepository(),
                 siteProfileRepository: PreviewSiteProfileRepository(),
                 themeSource: PreviewThemeSource(),
-                themeDetector: PreviewSiteThemeDetector()
+                themeDetector: PreviewSiteThemeDetector(),
+                catalogService: PreviewCatalogService(),
+                chapterPagesProvider: PreviewChapterPagesProvider()
             )
         }
     }

@@ -208,6 +208,16 @@
                                 systemImage: "checkmark.circle.fill"
                             )
                             .foregroundStyle(.green)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Score \(result.score)")
+                                if !result.matchedSignals.isEmpty {
+                                    Text(result.matchedSignals.joined(separator: ", "))
+                                        .lineLimit(3)
+                                }
+                            }
+                            .font(Typography.caption2)
+                            .foregroundStyle(.secondary)
                         }
 
                         if let error = viewModel.lastError {
@@ -276,6 +286,7 @@
 
         @State private var isEnabled: Bool
         @State private var automaticCookies: Bool
+        @State private var selectedThemeID: String
         @State private var showingChallenge = false
 
         init(profile: SiteProfile, viewModel: SitesViewModel, imageLoader: (any ImageLoading)?) {
@@ -284,6 +295,12 @@
             self.imageLoader = imageLoader
             self._isEnabled = State(initialValue: profile.isEnabled)
             self._automaticCookies = State(initialValue: profile.cookieHandling == .automatic)
+            self._selectedThemeID = State(initialValue: profile.themeID)
+        }
+
+        private var themeVersion: String? {
+            viewModel.availableThemes.first { $0.id == selectedThemeID }?.version
+                ?? (selectedThemeID == profile.themeID ? profile.themeVersion : nil)
         }
 
         var body: some View {
@@ -295,13 +312,21 @@
                         Text(profile.baseURL)
                             .foregroundStyle(.secondary)
                     }
-                    HStack {
-                        Text("Theme")
-                        Spacer()
-                        Text(profile.themeID)
-                            .foregroundStyle(.secondary)
+
+                    Picker("Theme", selection: $selectedThemeID) {
+                        ForEach(viewModel.availableThemes) { theme in
+                            Text(theme.name).tag(theme.id)
+                        }
+                        if !viewModel.availableThemes.contains(where: { $0.id == selectedThemeID }) {
+                            Text(selectedThemeID).tag(selectedThemeID)
+                        }
                     }
-                    if let version = profile.themeVersion {
+                    .onChange(of: selectedThemeID) { _, newValue in
+                        guard newValue != profile.themeID else { return }
+                        Task { await viewModel.setTheme(newValue, for: profile) }
+                    }
+
+                    if let version = themeVersion {
                         HStack {
                             Text("Version")
                             Spacer()
@@ -311,6 +336,8 @@
                     }
                 } header: {
                     Text("Site Info")
+                } footer: {
+                    Text("Theme detection is heuristic. Choose the theme that extracts this site correctly.")
                 }
 
                 Section {

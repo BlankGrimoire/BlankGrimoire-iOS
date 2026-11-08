@@ -58,6 +58,40 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(manga.lastReadPageIndex, 1)
         XCTAssertEqual(manga.readingProgress, 1.0, accuracy: 0.001)
     }
+
+    func testLoadFallsBackToChapterPagesProviderWhenCacheIsEmpty() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 0)
+        let loaded = (0..<2).map { PageEntity(index: $0, imageURL: "https://example.org/loaded\($0).jpg") }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: []),
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga),
+            chapterPagesProvider: TestChapterPagesProvider(pages: loaded)
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.pages.map(\.index), [0, 1])
+        XCTAssertEqual(viewModel.totalPages, 2)
+        XCTAssertNil(viewModel.lastError)
+    }
+}
+
+@MainActor
+private final class TestChapterPagesProvider: ChapterPagesProviding {
+    let pages: [PageEntity]
+
+    init(pages: [PageEntity]) {
+        self.pages = pages
+    }
+
+    func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity] {
+        pages
+    }
 }
 
 @MainActor
