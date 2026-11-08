@@ -50,8 +50,8 @@
             .refreshable {
                 await viewModel.loadManga()
             }
-            .task {
-                await viewModel.loadManga()
+            .onAppear {
+                Task { await viewModel.loadManga() }
             }
             .alert(
                 "Error",

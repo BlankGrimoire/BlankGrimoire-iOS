@@ -187,6 +187,26 @@ final class SitesViewModelTests: XCTestCase {
 
         XCTAssertEqual(repository.profiles.first?.isEnabled, false)
     }
+
+    func testSetThemePersistsUpdateAndInstalledVersion() async {
+        let profile = SiteProfile(
+            name: "Example Site",
+            baseURL: "https://example.org",
+            themeID: "theme.old"
+        )
+        let repository = TestSiteProfileRepository(profiles: [profile])
+        let viewModel = SitesViewModel(
+            siteProfileRepository: repository,
+            themeSource: TestThemeSource(),
+            themeDetector: TestThemeDetector()
+        )
+        await viewModel.loadProfiles()
+
+        await viewModel.setTheme("theme.example", for: profile)
+
+        XCTAssertEqual(repository.profiles.first?.themeID, "theme.example")
+        XCTAssertEqual(repository.profiles.first?.themeVersion, "1.0.0")
+    }
 }
 
 // MARK: - Test Doubles

@@ -12,10 +12,18 @@
             var id: String { "\(repositoryURL)::\(entry.id)::\(entry.version)" }
         }
 
+        private struct RepositoryIssue: Identifiable {
+            let repository: TrustedRepository
+            let message: String
+
+            var id: String { repository.url }
+        }
+
         private let store: any AdapterStore
         @State private var repositories: [TrustedRepository] = []
         @State private var adapters: [AdapterBundle] = []
         @State private var availableAdapters: [AvailableAdapter] = []
+        @State private var repositoryIssues: [RepositoryIssue] = []
         @State private var updates: [(adapter: AdapterBundle, update: ExtensionEntry)] = []
         @State private var repositoryURL = ""
         @State private var pendingTrust: (index: RepositoryIndex, url: String)?
@@ -45,6 +53,27 @@
                     }
                     Button("Add repository", systemImage: "plus") {
                         showingAddRepository = true
+                    }
+                }
+
+                if !repositoryIssues.isEmpty {
+                    Section("Repository issues") {
+                        ForEach(repositoryIssues) { issue in
+                            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                                Text(issue.repository.name)
+                                Text(issue.repository.url)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(issue.message)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                            .swipeActions {
+                                Button("Remove", role: .destructive) {
+                                    Task { await remove(issue.repository) }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -122,6 +151,9 @@
                         TextField("Repository index URL", text: $repositoryURL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                        Text("Use a full HTTPS index URL, for example https://example.org/index.json")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Button("Fetch and review") {
                             Task {
                                 await fetchRepository()
@@ -170,42 +202,69 @@
         private func load() async {
             isLoading = true
             defer { isLoading = false }
+
+            var messages: [String] = []
+
             do {
                 repositories = try await store.listTrustedRepositories()
-                adapters = try await store.listInstalledAdapters()
-                availableAdapters = try await loadAvailableAdapters(from: repositories)
             } catch {
-                errorMessage = error.localizedDescription
+                repositories = []
+                messages.append("Trusted repositories: \(error.localizedDescription)")
+            }
+
+            do {
+                adapters = try await store.listInstalledAdapters()
+            } catch {
+                adapters = []
+                messages.append("Installed adapters: \(error.localizedDescription)")
+            }
+
+            let result = await loadAvailableAdapters(from: repositories)
+            availableAdapters = result.adapters
+            repositoryIssues = result.issues
+
+            if !messages.isEmpty {
+                errorMessage = messages.joined(separator: "\n")
             }
         }
 
-        private func loadAvailableAdapters(from repositories: [TrustedRepository]) async throws -> [AvailableAdapter] {
+        private func loadAvailableAdapters(from repositories: [TrustedRepository]) async -> (
+            adapters: [AvailableAdapter], issues: [RepositoryIssue]
+        ) {
             var result: [AvailableAdapter] = []
+            var issues: [RepositoryIssue] = []
+
             for repository in repositories {
-                let index = try await store.fetchRepositoryIndex(from: repository.url)
-                result.append(
-                    contentsOf: index.extensions.map {
-                        AvailableAdapter(repositoryURL: repository.url, entry: $0)
-                    })
+                do {
+                    let index = try await store.fetchRepositoryIndex(from: repository.url)
+                    result.append(
+                        contentsOf: index.extensions.map {
+                            AvailableAdapter(repositoryURL: repository.url, entry: $0)
+                        })
+                } catch {
+                    issues.append(
+                        RepositoryIssue(
+                            repository: repository,
+                            message: error.localizedDescription
+                        ))
+                }
             }
-            return result
+
+            return (result, issues)
         }
 
         private func fetchRepository() async {
-            guard
-                let url = URL(string: repositoryURL),
-                url.scheme?.lowercased() == "https",
-                url.host != nil
-            else {
-                errorMessage = "Enter a valid HTTPS repository URL."
+            guard let indexURL = RepositoryURL.normalizedIndexURL(from: repositoryURL) else {
+                errorMessage =
+                    "Enter a full HTTPS repository index URL, for example https://example.org/index.json"
                 return
             }
 
             isLoading = true
             defer { isLoading = false }
             do {
-                let index = try await store.fetchRepositoryIndex(from: repositoryURL)
-                pendingTrust = (index, repositoryURL)
+                let index = try await store.fetchRepositoryIndex(from: indexURL.absoluteString)
+                pendingTrust = (index, indexURL.absoluteString)
             } catch {
                 errorMessage = error.localizedDescription
             }

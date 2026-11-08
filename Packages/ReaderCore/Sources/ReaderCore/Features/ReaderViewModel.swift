@@ -19,6 +19,7 @@ public final class ReaderViewModel {
     private let pageRepository: any PageRepository
     private let readingProgressRepository: any ReadingProgressRepository
     private let mangaRepository: any MangaRepository
+    private let chapterPagesProvider: (any ChapterPagesProviding)?
     private var hasLoaded = false
 
     public init(
@@ -26,13 +27,15 @@ public final class ReaderViewModel {
         chapter: ChapterEntity,
         pageRepository: any PageRepository,
         readingProgressRepository: any ReadingProgressRepository,
-        mangaRepository: any MangaRepository
+        mangaRepository: any MangaRepository,
+        chapterPagesProvider: (any ChapterPagesProviding)? = nil
     ) {
         self.manga = manga
         self.chapter = chapter
         self.pageRepository = pageRepository
         self.readingProgressRepository = readingProgressRepository
         self.mangaRepository = mangaRepository
+        self.chapterPagesProvider = chapterPagesProvider
     }
 
     public var totalPages: Int {
@@ -59,7 +62,12 @@ public final class ReaderViewModel {
         }
 
         do {
-            pages = try await pageRepository.fetchByChapterId(chapter.id).sorted { $0.index < $1.index }
+            var loaded = try await pageRepository.fetchByChapterId(chapter.id).sorted { $0.index < $1.index }
+            if loaded.isEmpty, let chapterPagesProvider {
+                loaded = try await chapterPagesProvider.pages(for: chapter, manga: manga)
+                    .sorted { $0.index < $1.index }
+            }
+            pages = loaded
             currentPageIndex = try await restoredPageIndex()
             hasLoaded = true
         } catch {

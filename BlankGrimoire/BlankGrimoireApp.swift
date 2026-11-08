@@ -40,6 +40,22 @@ struct BlankGrimoireApp: App {
                 requestHandler: adapterRequestHandler
             )
 
+            // The catalog service searches every saved site through its
+            // installed adapter, and the page provider loads chapter pages on
+            // demand from the same adapter.
+            let catalogService = SiteCatalogService(
+                siteProfileRepository: persistence.siteProfiles,
+                mangaRepository: persistence.mangas,
+                chapterRepository: persistence.chapters,
+                adapterStore: adapterStore
+            )
+            let chapterPagesProvider = DefaultChapterPagesProvider(
+                pageRepository: persistence.pages,
+                chapterRepository: persistence.chapters,
+                siteProfileRepository: persistence.siteProfiles,
+                adapterStore: adapterStore
+            )
+
             self.container = container
             self.dependencies = FeaturesDependencies(
                 mangaRepository: persistence.mangas,
@@ -50,7 +66,9 @@ struct BlankGrimoireApp: App {
                 themeSource: LocalThemeSource(adapterStore: adapterStore),
                 themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),
                 imageLoader: PipelineImageLoader(),
-                adapterStore: adapterStore
+                adapterStore: adapterStore,
+                catalogService: catalogService,
+                chapterPagesProvider: chapterPagesProvider
             )
         } catch {
             fatalError("Unable to initialize BlankGrimoire: \(error)")

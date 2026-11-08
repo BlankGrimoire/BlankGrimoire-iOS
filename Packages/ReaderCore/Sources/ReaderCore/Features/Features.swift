@@ -12,19 +12,21 @@
         }
     }
 
-    /// Main tab view with Library, Sites, and Settings
+    /// Main tab view with Library, Browse, Sites, and Settings
     private struct MainTabView: View {
         let dependencies: FeaturesDependencies
         @State private var selectedTab: Tab = .library
 
         enum Tab: String, CaseIterable {
             case library = "Library"
+            case browse = "Browse"
             case sites = "Sites"
             case settings = "Settings"
 
             var icon: String {
                 switch self {
                 case .library: return "books.vertical"
+                case .browse: return "magnifyingglass"
                 case .sites: return "globe"
                 case .settings: return "gear"
                 }
@@ -33,6 +35,7 @@
             var selectedIcon: String {
                 switch self {
                 case .library: return "books.vertical.fill"
+                case .browse: return "magnifyingglass"
                 case .sites: return "globe.fill"
                 case .settings: return "gear.fill"
                 }
@@ -51,6 +54,17 @@
                     )
                 }
                 .tag(Tab.library)
+
+                NavigationStack {
+                    SiteSearchView(dependencies: dependencies)
+                }
+                .tabItem {
+                    Label(
+                        Tab.browse.rawValue,
+                        systemImage: selectedTab == .browse ? Tab.browse.selectedIcon : Tab.browse.icon
+                    )
+                }
+                .tag(Tab.browse)
 
                 NavigationStack {
                     SitesView(dependencies: dependencies)

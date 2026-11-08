@@ -104,18 +104,16 @@
 
             func webView(
                 _ webView: WKWebView,
-                decidePolicyFor navigationAction: WKNavigationAction,
-                decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-            ) {
+                decidePolicyFor navigationAction: WKNavigationAction
+            ) async -> WKNavigationActionPolicy {
                 guard
                     let host = navigationAction.request.url?.host?.lowercased(),
                     parent.allowedHosts.isEmpty || parent.allowedHosts.contains(host)
                 else {
-                    decisionHandler(.cancel)
                     parent.errorMessage = "Navigation outside the approved site was blocked."
-                    return
+                    return .cancel
                 }
-                decisionHandler(.allow)
+                return .allow
             }
 
             func webView(
