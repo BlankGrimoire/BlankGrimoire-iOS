@@ -69,7 +69,6 @@ struct BlankGrimoireApp: App {
                 siteProfileRepository: persistence.siteProfiles,
                 adapterStore: adapterStore
             )
-
             self.container = container
             self.dependencies = FeaturesDependencies(
                 mangaRepository: persistence.mangas,

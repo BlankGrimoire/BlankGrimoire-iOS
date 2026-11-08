@@ -7,6 +7,7 @@
     public struct LibraryView: View {
         let dependencies: FeaturesDependencies
         @State private var viewModel: LibraryViewModel
+        @AppStorage("autoUpdate") private var autoUpdate: Bool = true
 
         public init(dependencies: FeaturesDependencies) {
             self.dependencies = dependencies
@@ -51,7 +52,9 @@
                 await viewModel.loadManga()
             }
             .onAppear {
-                Task { await viewModel.loadManga() }
+                if autoUpdate || viewModel.manga.isEmpty {
+                    Task { await viewModel.loadManga() }
+                }
             }
             .alert(
                 "Error",

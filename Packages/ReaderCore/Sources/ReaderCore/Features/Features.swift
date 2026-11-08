@@ -16,6 +16,7 @@
     private struct MainTabView: View {
         let dependencies: FeaturesDependencies
         @State private var selectedTab: Tab = .library
+        @AppStorage("theme") private var theme: AppTheme = .system
 
         enum Tab: String, CaseIterable {
             case library = "Library"
@@ -88,6 +89,7 @@
                 }
                 .tag(Tab.settings)
             }
+            .preferredColorScheme(theme.colorScheme)
         }
     }
 
@@ -95,10 +97,8 @@
     private struct SettingsView: View {
         let dependencies: FeaturesDependencies
         @AppStorage("autoUpdate") private var autoUpdate: Bool = true
-        @AppStorage("downloadOnWifiOnly") private var downloadOnWifiOnly: Bool = true
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @AppStorage("theme") private var theme: AppTheme = .system
-        @AppStorage("cookieHandling") private var cookieHandling: CookiePreference = .automatic
         @State private var showingClearCacheConfirmation = false
 
         private var appVersion: String {
@@ -115,18 +115,6 @@
                     }
 
                     Toggle("Auto-update library", isOn: $autoUpdate)
-                }
-
-                Section("Downloads") {
-                    Toggle("Download on Wi-Fi only", isOn: $downloadOnWifiOnly)
-                }
-
-                Section("Network") {
-                    Picker("Cookie handling", selection: $cookieHandling) {
-                        ForEach(CookiePreference.allCases) { preference in
-                            Text(preference.rawValue).tag(preference)
-                        }
-                    }
                 }
 
                 Section("Storage") {
@@ -194,6 +182,7 @@
         case horizontalLeftToRight = "Left to Right"
 
         var id: String { rawValue }
+
     }
 
     /// App theme enum
@@ -203,13 +192,14 @@
         case dark = "Dark"
 
         var id: String { rawValue }
-    }
 
-    enum CookiePreference: String, CaseIterable, Identifiable {
-        case automatic = "Automatic"
-        case none = "Off"
-
-        var id: String { rawValue }
+        var colorScheme: ColorScheme? {
+            switch self {
+            case .system: return nil
+            case .light: return .light
+            case .dark: return .dark
+            }
+        }
     }
 
     #if DEBUG
