@@ -7,9 +7,6 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     language: swift
-    scheme:
-      testTargets:
-        - BlankGrimoireTests
     settings:
       base:
         SWIFT_VERSION: "6.0"
@@ -29,26 +26,18 @@ targets:
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-          OTHER_SWIFT_FLAGS: -enable-bare-slash-regex
         Release:
           SWIFT_COMPILATION_MODE: wholemodule
     sources:
       - path: BlankGrimoire
     dependencies:
       - package: ReaderCore
-      - sdk: SwiftData.framework
-      - sdk: WebKit.framework
-      - sdk: Combine.framework
-      - sdk: SwiftUI.framework
 
   BlankGrimoireTests:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "17.0"
     language: swift
-    scheme:
-      testTargets:
-        - BlankGrimoireTests
     settings:
       base:
         SWIFT_VERSION: "6.0"
