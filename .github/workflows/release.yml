@@ -40,9 +40,19 @@ jobs:
     timeout-minutes: 60
     needs: quality
     steps:
+      - name: Create GitHub App token
+        id: release-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: BlankGrimoire
+          repositories: BlankGrimoire-iOS
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.release-token.outputs.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -58,7 +68,8 @@ jobs:
 
       - name: Run semantic-release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
           GIT_AUTHOR_NAME: BlankGrimoire contributors
           GIT_AUTHOR_EMAIL: blankgrimoire.dev@gmail.com
           GIT_COMMITTER_NAME: BlankGrimoire contributors
