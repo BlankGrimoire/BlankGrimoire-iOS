@@ -12,17 +12,21 @@ final class SiteURLTests: XCTestCase {
         )
     }
 
-    func testKeepsHTTPScheme() {
-        XCTAssertEqual(
-            SiteURL.normalizedURL(from: "http://example.org")?.absoluteString,
-            "http://example.org"
-        )
+    func testRejectsPlainHTTP() {
+        XCTAssertNil(SiteURL.normalizedURL(from: "http://example.org"))
     }
 
     func testBaseURLDropsPathQueryAndFragment() {
         XCTAssertEqual(
             SiteURL.baseURLString(from: "https://example.org/path?q=1#top"),
             "https://example.org"
+        )
+    }
+
+    func testSiteBaseURLKeepsPathPrefix() {
+        XCTAssertEqual(
+            SiteURL.siteBaseURLString(from: "https://example.org/library/?q=1#top"),
+            "https://example.org/library"
         )
     }
 

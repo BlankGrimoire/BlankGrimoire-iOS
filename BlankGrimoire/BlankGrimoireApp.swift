@@ -12,33 +12,22 @@ struct BlankGrimoireApp: App {
     @MainActor
     init() {
         do {
-            let schema = Schema([
-                MangaEntity.self,
-                ChapterEntity.self,
-                PageEntity.self,
-                ReadingProgressEntity.self,
-                BookmarkEntity.self,
-                SiteProfileEntity.self,
-                TrustedRepositoryEntity.self,
-                InstalledAdapterEntity.self,
-            ])
+            let schema = Schema(versionedSchema: BlankGrimoireSchemaV1.self)
             let configuration = ModelConfiguration(schema: schema)
-            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let container = try ModelContainer(
+                for: schema,
+                migrationPlan: BlankGrimoireMigrationPlan.self,
+                configurations: [configuration]
+            )
 
             let persistence = try SwiftDataPersistenceManager(container: container)
 
             // Repository requests derive a host-scoped policy from each
             // user-approved HTTPS repository URL.
-            let adapterRequestHandler = PluginRequestHandler(
-                policy: SiteNetworkPolicy(
-                    baseURL: "https://example.org",
-                    allowedHosts: ["example.org"]
-                )
-            )
-            let adapterStore = try DefaultAdapterStore(
-                modelContainer: container,
-                requestHandler: adapterRequestHandler
-            )
+            let adapterStore = try DefaultAdapterStore(modelContainer: container)
+            // Older builds stored the repository display name as the trust URL.
+            // Those rows can never match a request and are removed once.
+            try adapterStore.purgeInvalidTrustedRepositories()
 
             // Remote theme repository (GitHub Pages)
             let themeRepositoryURL = "https://blankgrimoire.github.io/BlankGrimoire-themes/index.json"
@@ -75,6 +64,7 @@ struct BlankGrimoireApp: App {
                 chapterRepository: persistence.chapters,
                 pageRepository: persistence.pages,
                 readingProgressRepository: persistence.readingProgress,
+                bookmarkRepository: persistence.bookmarks,
                 siteProfileRepository: persistence.siteProfiles,
                 themeSource: CompositeThemeSource(sources: [localThemeSource, remoteThemeSource]),
                 themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),

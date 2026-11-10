@@ -22,6 +22,13 @@ public final class ReaderViewModel {
     private let chapterPagesProvider: (any ChapterPagesProviding)?
     private var hasLoaded = false
 
+    /// Debounces progress writes triggered by page swipes.
+    private var saveDebounceTask: Task<Void, Never>?
+    /// Serialises the actual persistence work.
+    private var saveChain: Task<Void, Never>?
+    private var lastPersistedPageIndex: Int?
+    private var lastPersistedTotalPages: Int?
+
     public init(
         manga: MangaEntity,
         chapter: ChapterEntity,
@@ -75,25 +82,73 @@ public final class ReaderViewModel {
         }
     }
 
+    /// Forces a reload, for example after the user completes a site challenge.
+    public func reload() async {
+        hasLoaded = false
+        await load()
+    }
+
+    /// URL the visible verification browser must open, when the site asked for
+    /// a challenge.
+    public var challengeURL: URL? {
+        guard let error = lastError as? SiteBrowsingError else { return nil }
+        if case .challengeRequired(let url) = error {
+            return url
+        }
+        return nil
+    }
+
     public func setPage(index: Int) async {
         guard totalPages > 0 else { return }
         let clampedIndex = min(max(index, 0), totalPages - 1)
         guard clampedIndex != currentPageIndex else { return }
         currentPageIndex = clampedIndex
+        scheduleProgressSave()
+    }
+
+    /// Schedules a debounced progress write for rapid page changes.
+    private func scheduleProgressSave() {
+        saveDebounceTask?.cancel()
+        saveDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await self?.saveProgress()
+        }
+    }
+
+    /// Cancels the debounce and persists the current position immediately.
+    public func flushProgress() async {
+        saveDebounceTask?.cancel()
+        saveDebounceTask = nil
         await saveProgress()
     }
 
     public func saveProgress() async {
         guard totalPages > 0 else { return }
 
+        // Chain saves so two rapid writes cannot interleave on the same entry.
+        let previous = saveChain
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.persistProgress()
+        }
+        saveChain = task
+        await task.value
+    }
+
+    private func persistProgress() async {
+        guard totalPages > 0 else { return }
+
+        let pageIndex = min(max(currentPageIndex, 0), totalPages - 1)
+        if lastPersistedPageIndex == pageIndex, lastPersistedTotalPages == totalPages {
+            return
+        }
+
         isSavingProgress = true
         defer { isSavingProgress = false }
 
-        let pageIndex = min(max(currentPageIndex, 0), totalPages - 1)
-        let progressEntries: [ReadingProgressEntity]
-
         do {
-            progressEntries = try await readingProgressRepository.fetchByMangaIdAndChapterId(
+            let progressEntries = try await readingProgressRepository.fetchByMangaIdAndChapterId(
                 manga.id,
                 chapterId: chapter.id
             )
@@ -121,6 +176,9 @@ public final class ReaderViewModel {
                 totalPages: totalPages
             )
             try await mangaRepository.save(manga)
+
+            lastPersistedPageIndex = pageIndex
+            lastPersistedTotalPages = totalPages
         } catch {
             lastError = error
         }

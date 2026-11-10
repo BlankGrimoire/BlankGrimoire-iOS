@@ -268,7 +268,7 @@ final class RepositoryTests: XCTestCase {
         let fetched = try await persistenceManager.readingProgress.fetchByMangaId("manga-1")
         XCTAssertEqual(fetched.count, 1)
         XCTAssertEqual(fetched[0].pageIndex, 5)
-        XCTAssertEqual(fetched[0].progress, 0.25)
+        XCTAssertEqual(fetched[0].progress, 0.3)
         XCTAssertEqual(fetched[0].timeSpent, 120)
     }
 

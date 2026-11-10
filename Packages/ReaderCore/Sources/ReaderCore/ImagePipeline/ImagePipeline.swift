@@ -32,6 +32,12 @@ public struct ImagePipelineConfiguration: Sendable {
     /// Maximum number of redirects to follow.
     public let maxRedirects: Int
 
+    /// Hosts allowed to serve images. Empty means "any public HTTPS host".
+    public let allowedHosts: [String]
+
+    /// Maximum accepted image size in bytes.
+    public let maxImageBytes: Int
+
     public init(
         maxConcurrentDownloads: Int = 4,
         requestTimeout: TimeInterval = 30,
@@ -41,20 +47,25 @@ public struct ImagePipelineConfiguration: Sendable {
         diskCacheDirectory: URL? = nil,
         defaultHeaders: [String: String] = [:],
         followRedirects: Bool = true,
-        maxRedirects: Int = 5
+        maxRedirects: Int = 5,
+        allowedHosts: [String] = [],
+        maxImageBytes: Int = 25 * 1024 * 1024
     ) {
-        self.maxConcurrentDownloads = maxConcurrentDownloads
-        self.requestTimeout = requestTimeout
+        self.maxConcurrentDownloads = max(1, maxConcurrentDownloads)
+        self.requestTimeout = max(1, requestTimeout)
         self.enableDiskCache = enableDiskCache
         self.memoryCacheSize = memoryCacheSize
         self.diskCacheSize = diskCacheSize
         self.diskCacheDirectory =
             diskCacheDirectory
-            ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent(
+            ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent(
                 "ImagePipeline")
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("ImagePipeline")
         self.defaultHeaders = defaultHeaders
         self.followRedirects = followRedirects
-        self.maxRedirects = maxRedirects
+        self.maxRedirects = max(0, maxRedirects)
+        self.allowedHosts = allowedHosts
+        self.maxImageBytes = max(1, maxImageBytes)
     }
 }
 
@@ -125,11 +136,17 @@ public actor ImagePipeline {
         sessionConfig.timeoutIntervalForRequest = configuration.requestTimeout
         sessionConfig.timeoutIntervalForResource = configuration.requestTimeout * 2
         sessionConfig.httpAdditionalHeaders = configuration.defaultHeaders
+        sessionConfig.httpCookieStorage = nil
         sessionConfig.httpShouldSetCookies = false
         sessionConfig.httpCookieAcceptPolicy = .never
         sessionConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
 
-        let session = URLSession(configuration: sessionConfig)
+        let redirectGuard = ImageRedirectGuard(configuration: configuration)
+        let session = URLSession(
+            configuration: sessionConfig,
+            delegate: redirectGuard,
+            delegateQueue: nil
+        )
 
         return ImagePipeline(
             configuration: configuration,
@@ -160,6 +177,7 @@ public actor ImagePipeline {
         guard let url = URL(string: url) else {
             throw ImagePipelineError.invalidURL(url)
         }
+        try validateImageURL(url)
 
         let cacheKey = cacheKey(for: url, headers: headers)
 
@@ -246,12 +264,20 @@ public actor ImagePipeline {
     }
 
     /// Prefetches images for the next N pages of a chapter.
+    ///
+    /// - Parameters:
+    ///   - pageURLs: Ordered page image URLs.
+    ///   - count: How many leading pages to prefetch.
+    ///   - headers: Optional headers keyed by URL. Passing the same headers used
+    ///     by the reader keeps the cache key identical, avoiding a second
+    ///     download with a different key.
     public func prefetchNextPages(
         _ pageURLs: [String],
-        count: Int = 3
+        count: Int = 3,
+        headers: [String: [String: String]] = [:]
     ) async {
         let urlsToPrefetch = Array(pageURLs.prefix(count))
-        _ = await prefetch(urlsToPrefetch)
+        _ = await prefetch(urlsToPrefetch, headers: headers)
     }
 
     /// Clears all caches.
@@ -299,13 +325,15 @@ public actor ImagePipeline {
 
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        for (field, value) in headers ?? [:] {
+        for (field, value) in headers ?? [:] where !Self.isReservedHeader(field) {
             request.setValue(value, forHTTPHeaderField: field)
         }
+        // Reuse cookies obtained by the visible verification browser.
+        Self.applyChallengeCookies(to: &request, url: url)
 
         logger.log("Downloading: \(url.absoluteString)", level: .info)
 
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ImagePipelineError.invalidResponse
@@ -315,8 +343,14 @@ public actor ImagePipeline {
             throw ImagePipelineError.networkError("HTTP \(httpResponse.statusCode)")
         }
 
-        // Determine MIME type
-        let mimeType = httpResponse.mimeType
+        if let expected = httpResponse.expectedContentLength as Int64?,
+            expected > Int64(configuration.maxImageBytes)
+        {
+            throw ImagePipelineError.responseTooLarge(configuration.maxImageBytes)
+        }
+
+        let data = try await Self.collect(bytes, limit: configuration.maxImageBytes)
+        try Self.validateImageData(data, mimeType: httpResponse.mimeType)
 
         // Cache the result
         await cache.setData(data, for: cacheKey)
@@ -325,10 +359,152 @@ public actor ImagePipeline {
 
         return ImageResult(
             data: data,
-            mimeType: mimeType,
+            mimeType: httpResponse.mimeType,
             fromCache: false,
             originalURL: url.absoluteString
         )
+    }
+
+    // MARK: - Request validation
+
+    /// Only public HTTPS hosts may serve images.
+    ///
+    /// Adapters supply image URLs, so the pipeline cannot trust the scheme or
+    /// the host: local files, loopback and private networks must be rejected.
+    private func validateImageURL(_ url: URL) throws {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased(), !host.isEmpty else {
+            throw ImagePipelineError.invalidURL(url.absoluteString)
+        }
+
+        if !configuration.allowedHosts.isEmpty {
+            let allowed = configuration.allowedHosts.contains { pattern in
+                Self.host(host, matches: pattern)
+            }
+            guard allowed else {
+                throw ImagePipelineError.hostNotAllowed(host)
+            }
+        }
+
+        guard !Self.isPrivateHost(host) else {
+            throw ImagePipelineError.hostNotAllowed(host)
+        }
+    }
+
+    private static func host(_ host: String, matches pattern: String) -> Bool {
+        let pattern = pattern.lowercased()
+        guard !pattern.isEmpty else { return false }
+        if pattern == host { return true }
+        if pattern.hasPrefix("*.") {
+            let suffix = String(pattern.dropFirst(2))
+            return host == suffix || host.hasSuffix("." + suffix)
+        }
+        return host.hasSuffix("." + pattern)
+    }
+
+    /// Rejects loopback, link-local, private and single-label hosts.
+    private static func isPrivateHost(_ host: String) -> Bool {
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") {
+            return true
+        }
+
+        if host.contains(":") {
+            // IPv6 literal.
+            return host == "::1" || host == "::" || host.hasPrefix("fe80:") || host.hasPrefix("fc")
+                || host.hasPrefix("fd")
+        }
+
+        let parts = host.split(separator: ".")
+        guard parts.count == 4, parts.allSatisfy({ UInt8($0) != nil }) else {
+            // A public DNS name always has at least two labels.
+            return !host.contains(".")
+        }
+
+        guard let first = UInt8(parts[0]), let second = UInt8(parts[1]) else { return true }
+        if first == 10 || first == 127 || first == 0 || first == 169 && second == 254 {
+            return true
+        }
+        if first == 192 && second == 168 {
+            return true
+        }
+        if first == 172 && (16...31).contains(second) {
+            return true
+        }
+        return false
+    }
+
+    private static func isReservedHeader(_ field: String) -> Bool {
+        ["authorization", "cookie", "host"].contains(field.lowercased())
+    }
+
+    private static func applyChallengeCookies(to request: inout URLRequest, url: URL) {
+        guard let host = url.host else { return }
+        let cookies = ChallengeCookieStore.shared.cookies(forHost: host).filter { cookie in
+            guard cookie.isSecure else { return false }
+            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            return host.lowercased() == domain || host.lowercased().hasSuffix("." + domain)
+        }
+        guard !cookies.isEmpty else { return }
+        for (field, value) in HTTPCookie.requestHeaderFields(with: cookies) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+    }
+
+    /// Rejects HTML error pages masquerading as images.
+    private static func validateImageData(_ data: Data, mimeType: String?) throws {
+        guard !data.isEmpty else {
+            throw ImagePipelineError.invalidResponse
+        }
+
+        if let mimeType = mimeType?.lowercased(), mimeType != "image/svg+xml" {
+            guard mimeType.hasPrefix("image/") else {
+                throw ImagePipelineError.unsupportedImageFormat
+            }
+        }
+
+        let signature = [UInt8](data.prefix(12))
+        guard Self.hasImageSignature(signature) else {
+            throw ImagePipelineError.unsupportedImageFormat
+        }
+    }
+
+    private static func hasImageSignature(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count >= 4 else { return false }
+
+        // JPEG
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return true }
+        // PNG
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return true }
+        // GIF87a / GIF89a
+        if bytes.starts(with: [0x47, 0x49, 0x46, 0x38]) { return true }
+        // BMP
+        if bytes.starts(with: [0x42, 0x4D]) { return true }
+        // TIFF (little/big endian)
+        if bytes.starts(with: [0x49, 0x49, 0x2A, 0x00]) || bytes.starts(with: [0x4D, 0x4D, 0x00, 0x2A]) {
+            return true
+        }
+        // RIFF....WEBP
+        if bytes.count >= 12, bytes.starts(with: [0x52, 0x49, 0x46, 0x46]),
+            Array(bytes[8..<12]) == [0x57, 0x45, 0x42, 0x50]
+        {
+            return true
+        }
+        // ISO Base Media (HEIC/AVIF): ....ftyp
+        if bytes.count >= 8, Array(bytes[4..<8]) == [0x66, 0x74, 0x79, 0x70] {
+            return true
+        }
+        return false
+    }
+
+    private static func collect(_ bytes: URLSession.AsyncBytes, limit: Int) async throws -> Data {
+        var data = Data()
+        data.reserveCapacity(min(limit, 64 * 1024))
+        for try await byte in bytes {
+            if data.count >= limit {
+                throw ImagePipelineError.responseTooLarge(limit)
+            }
+            data.append(byte)
+        }
+        return data
     }
 
     /// Cache keys include a stable hash of the custom headers.
@@ -365,9 +541,105 @@ public actor ImagePipeline {
     }
 }
 
-// MARK: - Cache Statistics
+// MARK: - Redirect guard
 
-/// Statistics about cache usage.
+/// Applies the image network policy to every redirect hop.
+///
+/// `URLSession` follows redirects automatically by default, which would let a
+/// public URL redirect to a private host or an insecure scheme. This delegate
+/// re-validates each hop and enforces `maxRedirects`.
+private final class ImageRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let configuration: ImagePipelineConfiguration
+    private let lock = NSLock()
+    private var redirectCounts: [Int: Int] = [:]
+
+    init(configuration: ImagePipelineConfiguration) {
+        self.configuration = configuration
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard configuration.followRedirects else {
+            completionHandler(nil)
+            return
+        }
+
+        guard let url = request.url,
+            url.scheme?.lowercased() == "https",
+            let host = url.host?.lowercased(),
+            !host.isEmpty,
+            !Self.isPrivateHost(host)
+        else {
+            completionHandler(nil)
+            return
+        }
+
+        if !configuration.allowedHosts.isEmpty {
+            let allowed = configuration.allowedHosts.contains { pattern in
+                Self.hostMatches(host, pattern: pattern)
+            }
+            guard allowed else {
+                completionHandler(nil)
+                return
+            }
+        }
+
+        let redirects: Int = lock.withLock {
+            let next = (redirectCounts[task.taskIdentifier] ?? 0) + 1
+            redirectCounts[task.taskIdentifier] = next
+            return next
+        }
+        guard redirects <= configuration.maxRedirects else {
+            completionHandler(nil)
+            return
+        }
+
+        var forwarded = request
+        // Never forward credentials across hosts.
+        if request.url?.host?.lowercased() != task.originalRequest?.url?.host?.lowercased() {
+            forwarded.setValue(nil, forHTTPHeaderField: "Authorization")
+        }
+        completionHandler(forwarded)
+    }
+
+    private static func hostMatches(_ host: String, pattern: String) -> Bool {
+        let pattern = pattern.lowercased()
+        guard !pattern.isEmpty else { return false }
+        if pattern == host { return true }
+        if pattern.hasPrefix("*.") {
+            let suffix = String(pattern.dropFirst(2))
+            return host == suffix || host.hasSuffix("." + suffix)
+        }
+        return host.hasSuffix("." + pattern)
+    }
+
+    private static func isPrivateHost(_ host: String) -> Bool {
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") {
+            return true
+        }
+        if host.contains(":") {
+            return host == "::1" || host == "::" || host.hasPrefix("fe80:") || host.hasPrefix("fc")
+                || host.hasPrefix("fd")
+        }
+        let parts = host.split(separator: ".")
+        guard parts.count == 4, parts.allSatisfy({ UInt8($0) != nil }) else {
+            return !host.contains(".")
+        }
+        guard let first = UInt8(parts[0]), let second = UInt8(parts[1]) else { return true }
+        if first == 10 || first == 127 || first == 0 || (first == 169 && second == 254) {
+            return true
+        }
+        if first == 192 && second == 168 { return true }
+        if first == 172 && (16...31).contains(second) { return true }
+        return false
+    }
+}
+
 // MARK: - Async Semaphore
 
 /// A simple async semaphore implementation using a lock for synchronization.

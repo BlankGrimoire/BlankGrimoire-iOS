@@ -4,7 +4,10 @@ import Foundation
 
 /// Normalisation helpers for user-entered site URLs.
 public enum SiteURL {
-    /// Returns a URL with an explicit `http`/`https` scheme and a valid host.
+    /// Returns a URL with an explicit, secure `https` scheme and a valid host.
+    ///
+    /// Plain `http` is rejected: site credentials and page content must never
+    /// travel unencrypted.
     public static func normalizedURL(from raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -19,7 +22,7 @@ public enum SiteURL {
         guard
             let url = URL(string: candidate),
             let scheme = url.scheme?.lowercased(),
-            scheme == "http" || scheme == "https",
+            scheme == "https",
             let host = url.host,
             !host.isEmpty
         else {
@@ -27,6 +30,37 @@ public enum SiteURL {
         }
 
         return url
+    }
+
+    /// Returns the site root, preserving a meaningful path prefix.
+    ///
+    /// Sites served from a subdirectory (for example a catalog under
+    /// `/library`) keep that prefix; only query, fragment and credentials are
+    /// removed and trailing slashes are trimmed.
+    public static func siteBaseURLString(from raw: String) -> String? {
+        guard
+            let url = normalizedURL(from: raw),
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else {
+            return nil
+        }
+
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+
+        var path = components.path
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        components.path = path == "/" ? "" : path
+
+        guard var value = components.url?.absoluteString else { return nil }
+        while value.hasSuffix("/") {
+            value.removeLast()
+        }
+        return value
     }
 
     /// Returns a canonical scheme + host base URL without path, query or fragment.

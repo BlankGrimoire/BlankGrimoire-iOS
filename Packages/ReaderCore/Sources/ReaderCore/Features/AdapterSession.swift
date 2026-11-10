@@ -36,6 +36,24 @@ private struct JSAdapterRuntime: SiteAdapterRuntime {
     }
 }
 
+/// Errors raised while opening or validating an adapter session.
+public enum AdapterSessionError: Error, LocalizedError, Sendable, Equatable {
+    case bundleIntegrityFailed(String)
+    case invalidBundleEncoding
+    case unsupportedAPIVersion(found: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .bundleIntegrityFailed(let detail):
+            return "The installed adapter failed its integrity check: \(detail)"
+        case .invalidBundleEncoding:
+            return "The installed adapter is not valid UTF-8"
+        case .unsupportedAPIVersion(let found):
+            return "Unsupported adapter API version \(found); expected \(ContractVersion.current)"
+        }
+    }
+}
+
 typealias AdapterBridgeFactory = @Sendable (SiteProfile) -> PluginBridge
 typealias AdapterRuntimeFactory = @Sendable (AdapterBundle, PluginBridge) throws -> any SiteAdapterRuntime
 
@@ -45,7 +63,18 @@ enum AdapterRuntimeDefaults {
     }
 
     static func makeRuntime(bundle: AdapterBundle, bridge: PluginBridge) throws -> any SiteAdapterRuntime {
-        let script = String(decoding: bundle.bundleData, as: UTF8.self)
+        // The bundle read from storage must still match the hash approved at
+        // install time; otherwise a modified file would run unreviewed code.
+        do {
+            try SHA256Verifier.verify(bundle.bundleData, expectedHex: bundle.manifest.sha256)
+        } catch {
+            throw AdapterSessionError.bundleIntegrityFailed(error.localizedDescription)
+        }
+
+        guard let script = String(data: bundle.bundleData, encoding: .utf8) else {
+            throw AdapterSessionError.invalidBundleEncoding
+        }
+
         let runtime = try JSPluginRuntime(
             runtimeScript: try PluginRuntimeResources.runtimeScript(),
             adapterScript: script,
@@ -72,6 +101,12 @@ struct AdapterSession {
     ) async throws -> AdapterSession {
         guard let bundle = try await adapterStore.getInstalledAdapter(id: profile.themeID) else {
             throw SiteBrowsingError.adapterNotInstalled(profile.themeID)
+        }
+
+        // Decoding validates this too, but an in-memory bundle could be built
+        // without going through the decoder.
+        guard bundle.manifest.apiVersion == ContractVersion.current else {
+            throw AdapterSessionError.unsupportedAPIVersion(found: bundle.manifest.apiVersion)
         }
 
         let bridge = bridgeFactory(profile)

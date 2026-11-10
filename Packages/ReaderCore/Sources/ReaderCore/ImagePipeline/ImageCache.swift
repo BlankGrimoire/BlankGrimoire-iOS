@@ -216,11 +216,15 @@ public actor DiskImageCache: ImageCache {
         let fileName = cacheKey(for: key) + ".img"
         let fileURL = directory.appendingPathComponent(fileName)
 
-        // Remove old entry if exists
-        if let oldEntry = index[key] {
-            _currentSize -= oldEntry.size
+        // Remove the old entry *from the index* before touching the file. If
+        // the write below fails, the index and the size counter stay
+        // consistent, so a later eviction cannot subtract the same size twice.
+        if let oldEntry = index.removeValue(forKey: key) {
+            _currentSize = _currentSize >= oldEntry.size ? _currentSize - oldEntry.size : 0
             let oldURL = directory.appendingPathComponent(oldEntry.fileName)
-            try? FileManager.default.removeItem(at: oldURL)
+            if oldEntry.fileName != fileName {
+                try? FileManager.default.removeItem(at: oldURL)
+            }
         }
 
         // Write new data
@@ -242,14 +246,15 @@ public actor DiskImageCache: ImageCache {
             // Evict if needed
             await evictIfNeeded()
         } catch {
-            // Clean up on failure
+            // Clean up on failure and persist the removal of the old entry.
             try? FileManager.default.removeItem(at: fileURL)
+            await saveIndex()
         }
     }
 
     public func removeData(for key: String) async {
         guard let entry = index.removeValue(forKey: key) else { return }
-        _currentSize -= entry.size
+        _currentSize = _currentSize >= entry.size ? _currentSize - entry.size : 0
         let fileURL = directory.appendingPathComponent(entry.fileName)
         try? FileManager.default.removeItem(at: fileURL)
         await saveIndex()

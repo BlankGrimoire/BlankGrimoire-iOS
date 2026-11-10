@@ -51,7 +51,16 @@ public protocol PageRepository {
     func saveAll(_ pages: [PageEntity]) async throws
     func delete(_ page: PageEntity) async throws
     func deleteAll(for chapterId: String) async throws
+    /// Replaces every page of a chapter, atomically when the store supports it.
+    func replaceAll(for chapterId: String, with pages: [PageEntity]) async throws
     func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws
+}
+
+extension PageRepository {
+    public func replaceAll(for chapterId: String, with pages: [PageEntity]) async throws {
+        try await deleteAll(for: chapterId)
+        try await saveAll(pages)
+    }
 }
 
 /// Protocol for reading progress persistence

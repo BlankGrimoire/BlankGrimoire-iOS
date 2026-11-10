@@ -14,15 +14,18 @@ public final class MangaDetailViewModel {
     private let manga: MangaEntity
     private let chapterRepository: any ChapterRepository
     private let mangaRepository: any MangaRepository
+    private let catalogService: (any SiteCatalogProviding)?
 
     public init(
         manga: MangaEntity,
         chapterRepository: any ChapterRepository,
-        mangaRepository: any MangaRepository
+        mangaRepository: any MangaRepository,
+        catalogService: (any SiteCatalogProviding)? = nil
     ) {
         self.manga = manga
         self.chapterRepository = chapterRepository
         self.mangaRepository = mangaRepository
+        self.catalogService = catalogService
     }
 
     public func loadChapters() async {
@@ -37,8 +40,37 @@ public final class MangaDetailViewModel {
         }
     }
 
+    /// Refreshes the series from its site, falling back to the local chapters.
+    ///
+    /// A network failure is surfaced as an error but must not empty the
+    /// already imported chapter list.
     public func refresh() async {
-        await loadChapters()
+        if let catalogService {
+            isLoadingChapters = true
+            lastError = nil
+            do {
+                try await catalogService.refreshChapters(for: manga)
+            } catch {
+                lastError = error
+            }
+        }
+
+        do {
+            chapters = try await chapterRepository.fetchByMangaId(manga.id)
+        } catch {
+            lastError = error
+        }
+        isLoadingChapters = false
+    }
+
+    /// URL the visible verification browser must open, when the site asked for
+    /// a challenge.
+    public var challengeURL: URL? {
+        guard let error = lastError as? SiteBrowsingError else { return nil }
+        if case .challengeRequired(let url) = error {
+            return url
+        }
+        return nil
     }
 
     public func toggleFavorite() async {

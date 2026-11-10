@@ -134,6 +134,13 @@
         var id: String { chapter.id }
     }
 
+    private struct ChallengeRoute: Identifiable {
+        let url: URL
+        let allowedHosts: Set<String>
+
+        var id: String { url.absoluteString }
+    }
+
     /// Manga detail view showing full information and chapters
     public struct MangaDetailView: View {
         let manga: MangaEntity
@@ -141,6 +148,7 @@
 
         @State private var viewModel: MangaDetailViewModel
         @State private var readerRoute: ReaderRoute?
+        @State private var challengeRoute: ChallengeRoute?
         @Environment(\.dismiss) private var dismiss
 
         public init(manga: MangaEntity, dependencies: FeaturesDependencies) {
@@ -150,7 +158,8 @@
                 initialValue: MangaDetailViewModel(
                     manga: manga,
                     chapterRepository: dependencies.chapterRepository,
-                    mangaRepository: dependencies.mangaRepository
+                    mangaRepository: dependencies.mangaRepository,
+                    catalogService: dependencies.catalogService
                 )
             )
         }
@@ -413,10 +422,28 @@
                     ReaderView(manga: manga, chapter: route.chapter, dependencies: dependencies)
                 }
             }
+            .onChange(of: viewModel.challengeURL) { _, url in
+                guard let url else { return }
+                let hosts = Set(
+                    [manga.siteURL.flatMap { URL(string: $0)?.host?.lowercased() }].compactMap { $0 }
+                )
+                guard !hosts.isEmpty else { return }
+                challengeRoute = ChallengeRoute(url: url, allowedHosts: hosts)
+            }
+            .sheet(item: $challengeRoute) { route in
+                ChallengeView(
+                    url: route.url,
+                    allowedHosts: route.allowedHosts,
+                    onComplete: {
+                        challengeRoute = nil
+                        Task { await viewModel.refresh() }
+                    }
+                )
+            }
             .alert(
                 "Error",
                 isPresented: Binding(
-                    get: { viewModel.lastError != nil },
+                    get: { viewModel.lastError != nil && viewModel.challengeURL == nil },
                     set: { isPresented in
                         if !isPresented {
                             viewModel.lastError = nil

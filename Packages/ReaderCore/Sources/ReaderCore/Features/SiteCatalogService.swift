@@ -77,7 +77,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
                             )
                         )
                     }
-                    return await self.search(profile: profile, query: trimmed)
+                    return await self.searchWithTimeout(profile: profile, query: trimmed)
                 }
             }
 
@@ -101,6 +101,37 @@ public final class SiteCatalogService: SiteCatalogProviding {
         failures.sort { $0.siteName.localizedStandardCompare($1.siteName) == .orderedAscending }
 
         return SiteSearchOutcome(results: results, failures: failures)
+    }
+
+    /// Runs one site search with a hard deadline.
+    ///
+    /// A site that never answers must not block the cross-site results.
+    private func searchWithTimeout(
+        profile: SiteProfile,
+        query: String,
+        timeout: Duration = .seconds(20)
+    ) async -> SiteSearchSiteOutcome {
+        await withTaskGroup(of: SiteSearchSiteOutcome?.self) { group in
+            group.addTask {
+                await self.search(profile: profile, query: query)
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil
+            }
+
+            let first = await group.next() ?? nil
+            group.cancelAll()
+
+            return first
+                ?? .failure(
+                    SiteSearchFailure(
+                        siteProfileID: profile.id,
+                        siteName: profile.name,
+                        message: SiteBrowsingError.searchFailed("Request timed out").localizedDescription
+                    )
+                )
+        }
     }
 
     private func search(profile: SiteProfile, query: String) async -> SiteSearchSiteOutcome {
@@ -175,6 +206,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
             guard let url = URL(string: expanded, relativeTo: baseURL)?.absoluteURL else {
                 throw SiteBrowsingError.invalidSearchURL(path)
             }
+            try validateSameSite(url, profile: profile)
             return url
         }
 
@@ -195,7 +227,21 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let url = components.url else {
             throw SiteBrowsingError.invalidSearchURL(path)
         }
+        try validateSameSite(url, profile: profile)
         return url
+    }
+
+    /// Search URLs must stay on the site's own host (or a subdomain).
+    private func validateSameSite(_ url: URL, profile: SiteProfile) throws {
+        guard let host = url.host?.lowercased() else {
+            throw SiteBrowsingError.invalidSearchURL(url.absoluteString)
+        }
+        guard let baseHost = URL(string: profile.baseURL)?.host?.lowercased(), !baseHost.isEmpty else {
+            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
+        }
+        guard HostMatcher.matches(pattern: baseHost, host: host) else {
+            throw SiteBrowsingError.invalidSearchURL(url.absoluteString)
+        }
     }
 
     // MARK: - Import
@@ -235,15 +281,72 @@ public final class SiteCatalogService: SiteCatalogProviding {
         }
     }
 
+    /// Refreshes details and chapter list for an already imported series.
+    ///
+    /// The local library stays usable when the site is unreachable: the caller
+    /// keeps the persisted chapters and reports the network error separately.
+    public func refreshChapters(for manga: MangaEntity) async throws {
+        guard let profile = try await resolveProfile(for: manga) else {
+            throw SiteBrowsingError.siteProfileNotFound(manga.siteProfileID ?? manga.siteURL ?? manga.id)
+        }
+
+        let session = try await AdapterSession.open(
+            profile: profile,
+            adapterStore: adapterStore,
+            bridgeFactory: bridgeFactory,
+            runtimeFactory: runtimeFactory
+        )
+
+        do {
+            let key = manga.adapterKey
+            guard let detailsURL = AdapterSession.absoluteURL(key, baseURL: profile.baseURL) else {
+                throw SiteBrowsingError.invalidSiteURL(key)
+            }
+            let html = try await fetchHTML(detailsURL, session: session)
+            let context = PluginPageContext(
+                html: html,
+                baseURL: profile.baseURL,
+                siteName: profile.name,
+                overrides: profile.selectorOverrides
+            )
+
+            let details = try await session.runtime.details(for: key, in: context)
+            let chapters = try await session.runtime.chapters(for: key, in: context)
+            _ = try await persist(details: details, chapters: chapters, profile: profile, existing: manga)
+            await session.dispose()
+        } catch {
+            await session.dispose()
+            throw error
+        }
+    }
+
+    /// Finds the site profile that owns a persisted series.
+    private func resolveProfile(for manga: MangaEntity) async throws -> SiteProfile? {
+        if let siteProfileID = manga.siteProfileID,
+            let profile = try await siteProfileRepository.fetch(id: siteProfileID)
+        {
+            return profile
+        }
+
+        guard let siteURL = manga.siteURL, let host = URL(string: siteURL)?.host?.lowercased() else {
+            return nil
+        }
+        let profiles = try await siteProfileRepository.fetchAll()
+        return profiles.first { URL(string: $0.baseURL)?.host?.lowercased() == host }
+    }
+
     private func persist(
         details: MangaDetails,
         chapters: [Chapter],
-        profile: SiteProfile
+        profile: SiteProfile,
+        existing: MangaEntity? = nil
     ) async throws -> MangaEntity {
         let identifier = MangaEntity.makeID(siteProfileID: profile.id, key: details.key)
         let manga: MangaEntity
-        if let existing = try await mangaRepository.fetchById(identifier) {
+        if let existing {
             manga = existing
+        } else if let stored = try await mangaRepository.fetchById(identifier) {
+            manga = stored
         } else {
             manga = details.makeEntity()
             manga.id = identifier
@@ -258,17 +361,40 @@ public final class SiteCatalogService: SiteCatalogProviding {
         try await mangaRepository.save(manga)
 
         let existingChapters = try await chapterRepository.fetchByMangaId(manga.id)
-        var chaptersByID = Dictionary(uniqueKeysWithValues: existingChapters.map { ($0.id, $0) })
+        var chaptersByKey = Dictionary(
+            existingChapters.map { ($0.adapterKey, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
-        let imported = chapters.map { chapter -> ChapterEntity in
-            let entity = chaptersByID[chapter.key] ?? chapter.makeEntity(manga: manga)
+        var seenKeys = Set<String>()
+        let imported = chapters.compactMap { chapter -> ChapterEntity? in
+            // Adapters can return the same key twice; keep the first occurrence
+            // instead of crashing on a duplicate dictionary key.
+            guard seenKeys.insert(chapter.key).inserted else {
+                return nil
+            }
+
+            let entity =
+                chaptersByKey[chapter.key]
+                ?? chapter.makeEntity(manga: manga, siteProfileID: profile.id)
+            entity.sourceKey = chapter.key
             chapter.apply(to: entity, manga: manga)
-            chaptersByID[chapter.key] = entity
+            chaptersByKey[chapter.key] = entity
             return entity
         }
 
         if !imported.isEmpty {
             try await chapterRepository.saveAll(imported)
+
+            // Reconcile chapters that disappeared from the site. Only do this
+            // when the adapter returned at least as many chapters as we have:
+            // paginated adapters may legitimately return a shorter list.
+            if chapters.count >= existingChapters.count {
+                let incomingKeys = Set(imported.map(\.adapterKey))
+                for stale in existingChapters where !incomingKeys.contains(stale.adapterKey) {
+                    try await chapterRepository.delete(stale)
+                }
+            }
         }
 
         return manga
@@ -278,6 +404,9 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     private func fetchHTML(_ url: URL, session: AdapterSession) async throws -> String {
         let response = try await session.bridge.request(HttpRequest(url: url.absoluteString))
+        if response.status == 403 || response.status == 503 {
+            throw SiteBrowsingError.challengeRequired(url)
+        }
         guard (200...299).contains(response.status) else {
             throw SiteBrowsingError.searchFailed("HTTP \(response.status)")
         }

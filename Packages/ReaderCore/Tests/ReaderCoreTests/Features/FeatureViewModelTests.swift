@@ -96,7 +96,7 @@ final class SitesViewModelTests: XCTestCase {
         )
 
         XCTAssertTrue(added)
-        XCTAssertEqual(repository.profiles.first?.baseURL, "https://example.org")
+        XCTAssertEqual(repository.profiles.first?.baseURL, "https://example.org/some/path")
         XCTAssertEqual(repository.profiles.first?.name, "example.org")
         XCTAssertNil(viewModel.lastError)
     }

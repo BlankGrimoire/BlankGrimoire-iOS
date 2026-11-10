@@ -20,7 +20,7 @@ final class ThemeSourceTests: XCTestCase {
             )
         )
 
-        adapterStore = try await DefaultAdapterStore.createInMemory(requestHandler: requestHandler)
+        adapterStore = try await DefaultAdapterStore.createInMemory()
 
         localSource = LocalThemeSource(adapterStore: adapterStore)
     }

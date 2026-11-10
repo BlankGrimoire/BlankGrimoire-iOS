@@ -303,7 +303,7 @@ private final class TestAdapterStore: AdapterStore {
     func fetchRepositoryIndex(from url: String) async throws -> RepositoryIndex {
         RepositoryIndex(formatVersion: 1, name: "Example", publicKey: "ed25519:test", extensions: [])
     }
-    func trustRepository(_ index: RepositoryIndex) async throws {}
+    func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws {}
     func isRepositoryTrusted(_ url: String) async throws -> Bool { true }
     func listTrustedRepositories() async throws -> [TrustedRepository] { [] }
     func removeTrust(for url: String) async throws {}

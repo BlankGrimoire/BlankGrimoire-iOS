@@ -22,6 +22,11 @@ public final class SiteProfileEntity {
     public var maxRedirects: Int
     public var timeout: TimeInterval
 
+    /// Set when the stored payload cannot be decoded. The raw bytes are kept
+    /// so a later save does not silently replace the user's data with defaults.
+    @Transient private var selectorOverridesDecodeFailed = false
+    @Transient private var customHeadersDecodeFailed = false
+
     public init(profile: SiteProfile) {
         self.id = profile.id
         self.name = profile.name
@@ -39,17 +44,32 @@ public final class SiteProfileEntity {
 
     /// Converts the stored entity back into the immutable domain value.
     public var profile: SiteProfile {
-        SiteProfile(
+        let overrides: ThemeSelectorsOverrides
+        if let decoded = Self.decode(ThemeSelectorsOverrides.self, from: selectorOverridesData) {
+            overrides = decoded
+        } else {
+            selectorOverridesDecodeFailed = true
+            overrides = ThemeSelectorsOverrides()
+        }
+
+        let headers: [String: String]
+        if let decoded = Self.decode([String: String].self, from: customHeadersData) {
+            headers = decoded
+        } else {
+            customHeadersDecodeFailed = true
+            headers = [:]
+        }
+
+        return SiteProfile(
             id: id,
             name: name,
             baseURL: baseURL,
             themeID: themeID,
             themeVersion: themeVersion,
-            selectorOverrides: Self.decode(ThemeSelectorsOverrides.self, from: selectorOverridesData)
-                ?? ThemeSelectorsOverrides(),
+            selectorOverrides: overrides,
             isEnabled: isEnabled,
             lastAccessedAt: lastAccessedAt,
-            customHeaders: Self.decode([String: String].self, from: customHeadersData) ?? [:],
+            customHeaders: headers,
             cookieHandling: CookieHandling(rawValue: cookieHandlingRaw) ?? .automatic,
             maxRedirects: maxRedirects,
             timeout: timeout
@@ -62,21 +82,36 @@ public final class SiteProfileEntity {
         baseURL = profile.baseURL
         themeID = profile.themeID
         themeVersion = profile.themeVersion
-        selectorOverridesData = Self.encode(profile.selectorOverrides)
+        if !selectorOverridesDecodeFailed {
+            selectorOverridesData = Self.encode(profile.selectorOverrides)
+        }
         isEnabled = profile.isEnabled
         lastAccessedAt = profile.lastAccessedAt
-        customHeadersData = Self.encode(profile.customHeaders)
+        if !customHeadersDecodeFailed {
+            customHeadersData = Self.encode(profile.customHeaders)
+        }
         cookieHandlingRaw = profile.cookieHandling.rawValue
-        maxRedirects = profile.maxRedirects
-        timeout = profile.timeout
+        maxRedirects = max(0, profile.maxRedirects)
+        timeout = max(1, profile.timeout)
     }
 
-    private static func encode<T: Encodable>(_ value: T) -> Data? {
-        try? JSONEncoder().encode(value)
+    /// Versioned envelope so future format changes can be migrated explicitly.
+    private struct Payload<Value: Codable>: Codable {
+        let version: Int
+        let value: Value
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from data: Data?) -> T? {
+    private static func encode<T: Codable>(_ value: T) -> Data? {
+        try? JSONEncoder().encode(Payload(version: 1, value: value))
+    }
+
+    private static func decode<T: Codable>(_ type: T.Type, from data: Data?) -> T? {
         guard let data else { return nil }
+
+        if let payload = try? JSONDecoder().decode(Payload<T>.self, from: data), payload.version == 1 {
+            return payload.value
+        }
+        // Legacy rows stored the bare value without an envelope.
         return try? JSONDecoder().decode(type, from: data)
     }
 }

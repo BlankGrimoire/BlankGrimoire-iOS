@@ -39,6 +39,16 @@
             catalogService != nil
         }
 
+        /// URL the visible verification browser must open, when the last
+        /// operation was stopped by a site challenge.
+        public var challengeURL: URL? {
+            guard let error = lastError as? SiteBrowsingError else { return nil }
+            if case .challengeRequired(let url) = error {
+                return url
+            }
+            return nil
+        }
+
         /// Sites that can receive the next search.
         public var searchableSites: [SiteProfile] {
             sites.filter(\.isEnabled)
@@ -123,10 +133,18 @@
         }
     }
 
+    private struct ChallengeRoute: Identifiable {
+        let url: URL
+        let allowedHosts: Set<String>
+
+        var id: String { url.absoluteString }
+    }
+
     /// General search across every saved site.
     public struct SiteSearchView: View {
         private let dependencies: FeaturesDependencies
         @State private var viewModel: SiteSearchViewModel
+        @State private var challengeRoute: ChallengeRoute?
 
         public init(dependencies: FeaturesDependencies) {
             self.dependencies = dependencies
@@ -185,10 +203,31 @@
                 guard viewModel.hasSearched else { return }
                 Task { await viewModel.search() }
             }
+            .onChange(of: viewModel.challengeURL) { _, url in
+                guard let url else { return }
+                let hosts = Set(
+                    viewModel.sites.compactMap { URL(string: $0.baseURL)?.host?.lowercased() }
+                ).filter { host in
+                    url.host?.lowercased() == host
+                        || url.host?.lowercased().hasSuffix("." + host) == true
+                }
+                guard !hosts.isEmpty else { return }
+                challengeRoute = ChallengeRoute(url: url, allowedHosts: Set(hosts))
+            }
+            .sheet(item: $challengeRoute) { route in
+                ChallengeView(
+                    url: route.url,
+                    allowedHosts: route.allowedHosts,
+                    onComplete: {
+                        challengeRoute = nil
+                        viewModel.lastError = nil
+                    }
+                )
+            }
             .alert(
                 "Error",
                 isPresented: Binding(
-                    get: { viewModel.lastError != nil },
+                    get: { viewModel.lastError != nil && viewModel.challengeURL == nil },
                     set: { isPresented in
                         if !isPresented {
                             viewModel.lastError = nil
