@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import CoreFoundation
 import Foundation
 
 /// Configuration for HTTP requests per site.
@@ -22,20 +23,26 @@ public struct SiteNetworkPolicy: Codable, Sendable, Equatable {
     /// Additional headers to include in all requests.
     public let defaultHeaders: [String: String]
 
+    /// Maximum accepted response body size in bytes.
+    public let maxResponseBytes: Int
+
+    /// Creates a per-site network policy.
     public init(
         baseURL: String,
         allowedHosts: [String] = [],
         maxRedirects: Int = 5,
         cookieHandling: CookieHandling = .automatic,
         timeout: TimeInterval = 30,
-        defaultHeaders: [String: String] = [:]
+        defaultHeaders: [String: String] = [:],
+        maxResponseBytes: Int = 10 * 1024 * 1024
     ) {
         self.baseURL = baseURL
         self.allowedHosts = allowedHosts
-        self.maxRedirects = maxRedirects
+        self.maxRedirects = max(0, maxRedirects)
         self.cookieHandling = cookieHandling
-        self.timeout = timeout
+        self.timeout = max(1, timeout)
         self.defaultHeaders = defaultHeaders
+        self.maxResponseBytes = max(1, maxResponseBytes)
     }
 }
 
@@ -60,6 +67,8 @@ public enum RequestHandlerError: Error, LocalizedError, Sendable, Equatable {
     case networkError(String)
     case invalidResponse
     case cookieError(String)
+    case responseTooLarge(limit: Int)
+    case unsupportedScheme(String)
 
     public var errorDescription: String? {
         switch self {
@@ -77,6 +86,10 @@ public enum RequestHandlerError: Error, LocalizedError, Sendable, Equatable {
             return "Invalid HTTP response"
         case .cookieError(let msg):
             return "Cookie error: \(msg)"
+        case .responseTooLarge(let limit):
+            return "Response exceeds the \(limit)-byte limit"
+        case .unsupportedScheme(let scheme):
+            return "Unsupported URL scheme: \(scheme)"
         }
     }
 }
@@ -91,90 +104,75 @@ public enum RequestHandlerError: Error, LocalizedError, Sendable, Equatable {
 /// - Request/response logging
 public actor PluginRequestHandler {
     private let policy: SiteNetworkPolicy
-    private let cookieStorage: HTTPCookieStorage
     private let session: URLSession
     private let logger: PluginLogger
+
+    /// Per-handler cookie jar.
+    ///
+    /// `HTTPCookieStorage.shared` is process-wide and would leak cookies across
+    /// sites. Each handler owns its own jar, keyed by `name|domain|path`.
+    private var cookieJar: [String: HTTPCookie] = [:]
+
+    /// Blocks automatic redirects so every hop passes through `validateHost`.
+    private let redirectBlocker = RedirectBlocker()
 
     /// Creates a request handler for a specific site policy.
     public init(policy: SiteNetworkPolicy, logger: PluginLogger = ConsolePluginLogger()) {
         self.policy = policy
         self.logger = logger
 
-        // Use ephemeral session if cookie handling is disabled
-        let config = URLSessionConfiguration.default
-        if policy.cookieHandling == .none {
-            config.httpCookieStorage = nil
-            config.httpCookieAcceptPolicy = .never
-        }
+        let config = URLSessionConfiguration.ephemeral
+        // Cookie handling is manual and per-handler; URLSession must not read
+        // or write the shared cookie storage behind our back.
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = policy.timeout
         config.timeoutIntervalForResource = policy.timeout * 2
-        config.httpAdditionalHeaders = policy.defaultHeaders
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
 
-        self.cookieStorage = config.httpCookieStorage ?? HTTPCookieStorage.shared
         self.session = URLSession(configuration: config)
     }
 
     /// Performs an HTTP request with policy enforcement.
     ///
     /// The request goes through:
-    /// 1. URL validation
-    /// 2. Host allowlist check
-    /// 3. Redirect handling (up to maxRedirects)
-    /// 4. Cookie injection/extraction (if enabled)
+    /// 1. URL/scheme validation
+    /// 2. Host allowlist check (fail-closed)
+    /// 3. Redirect handling (up to maxRedirects, method/body per status)
+    /// 4. Per-site cookie injection/extraction (if enabled)
+    /// 5. Response size limit
     public func perform(_ request: HttpRequest) async throws -> HttpResponse {
-        // 1. Validate URL
         guard let url = URL(string: request.url) else {
             throw RequestHandlerError.invalidURL(request.url)
         }
 
-        // 2. Check allowlist
+        try validateScheme(url)
         try validateHost(url)
 
-        // 3. Build URLRequest
         var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = request.method
-        urlRequest.allHTTPHeaderFields = request.headers
+        urlRequest.httpMethod = request.method.uppercased()
+        applyHeaders(request.headers, to: &urlRequest)
 
         if let body = request.body {
             urlRequest.httpBody = Data(body.utf8)
-            if urlRequest.value(forHTTPHeaderField: "Content-Type") == nil {
-                urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            }
         }
 
-        // 4. Apply cookies if enabled
-        if policy.cookieHandling == .automatic {
-            let cookies = cookieStorage.cookies(for: url) ?? []
-            let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)
-            for (field, value) in cookieHeader {
-                urlRequest.setValue(value, forHTTPHeaderField: field)
-            }
-        }
+        applyCookies(for: url, to: &urlRequest)
 
-        // 5. Perform request with redirect handling
         let (data, response) = try await performWithRedirectHandling(urlRequest, redirectCount: 0)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw RequestHandlerError.invalidResponse
         }
 
-        // 6. Extract cookies from response
-        if policy.cookieHandling == .automatic,
-            let headerFields = httpResponse.allHeaderFields as? [String: String],
-            let responseURL = httpResponse.url
-        {
-            let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: responseURL)
-            for cookie in cookies {
-                cookieStorage.setCookie(cookie)
-            }
-        }
+        storeCookies(from: httpResponse)
 
-        // 7. Build response
         let headers = (httpResponse.allHeaderFields as? [String: String]) ?? [:]
-        let body = String(decoding: data, as: UTF8.self)
+        let body = decodedBody(data, response: httpResponse)
 
         logger.log(
-            "HTTP \(request.method) \(request.url) -> \(httpResponse.statusCode)",
+            "HTTP \(request.method) \(Self.redactedURL(httpResponse.url ?? url)) -> \(httpResponse.statusCode)",
             level: 0,
             context: ["site": policy.baseURL]
         )
@@ -187,33 +185,243 @@ public actor PluginRequestHandler {
         )
     }
 
+    /// Checks that the URL uses a supported, secure-for-production scheme.
+    private func validateScheme(_ url: URL) throws {
+        guard let scheme = url.scheme?.lowercased() else {
+            throw RequestHandlerError.invalidURL(url.absoluteString)
+        }
+        guard scheme == "https" else {
+            throw RequestHandlerError.unsupportedScheme(scheme)
+        }
+    }
+
     /// Checks if a host is allowed by the policy.
+    ///
+    /// An empty allowlist falls back to the host in `baseURL`. If neither is
+    /// available the request is denied: an empty policy never means "allow all".
     private func validateHost(_ url: URL) throws {
-        guard let host = url.host else {
+        guard let host = url.host, !host.isEmpty else {
             throw RequestHandlerError.invalidURL(url.absoluteString)
         }
 
-        // If no allowlist configured, allow all hosts (backward compatibility)
-        if policy.allowedHosts.isEmpty {
-            return
+        let patterns = effectiveAllowedHosts()
+        guard !patterns.isEmpty else {
+            throw RequestHandlerError.hostNotAllowed(host)
         }
 
-        let isAllowed = policy.allowedHosts.contains { pattern in
-            matchHost(pattern, host)
-        }
-
-        if !isAllowed {
+        guard patterns.contains(where: { HostMatcher.matches(pattern: $0, host: host) }) else {
             throw RequestHandlerError.hostNotAllowed(host)
         }
     }
 
-    /// Matches a host against a pattern (supports wildcards and subdomains).
+    private func effectiveAllowedHosts() -> [String] {
+        if !policy.allowedHosts.isEmpty {
+            return policy.allowedHosts
+        }
+        guard let host = URL(string: policy.baseURL)?.host, !host.isEmpty else {
+            return []
+        }
+        return [host]
+    }
+
+    private func applyHeaders(_ headers: [String: String]?, to request: inout URLRequest) {
+        for (field, value) in policy.defaultHeaders where !Self.isReservedHeader(field) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        for (field, value) in headers ?? [:] {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+    }
+
+    /// Apple does not guarantee reserved headers set through
+    /// `httpAdditionalHeaders`; callers must provide them per request.
+    private static func isReservedHeader(_ field: String) -> Bool {
+        ["authorization", "cookie", "host"].contains(field.lowercased())
+    }
+
+    private func applyCookies(for url: URL, to request: inout URLRequest) {
+        guard policy.cookieHandling == .automatic else { return }
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return }
+
+        var merged: [String: HTTPCookie] = [:]
+        // Session cookies set by regular responses win over challenge cookies
+        // for the same name/domain/path.
+        for cookie in ChallengeCookieStore.shared.cookies(forHost: host)
+        where Self.cookie(cookie, appliesTo: url) {
+            merged[Self.cookieKey(cookie)] = cookie
+        }
+        for cookie in cookieJar.values where Self.cookie(cookie, appliesTo: url) {
+            merged[Self.cookieKey(cookie)] = cookie
+        }
+
+        guard !merged.isEmpty else { return }
+        for (field, value) in HTTPCookie.requestHeaderFields(with: Array(merged.values)) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+    }
+
+    private func storeCookies(from response: HTTPURLResponse) {
+        guard policy.cookieHandling == .automatic,
+            let headerFields = response.allHeaderFields as? [String: String],
+            let responseURL = response.url
+        else {
+            return
+        }
+
+        let now = Date()
+        cookieJar = cookieJar.filter { _, cookie in
+            guard let expires = cookie.expiresDate else { return true }
+            return expires > now
+        }
+
+        for cookie in HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: responseURL) {
+            cookieJar[Self.cookieKey(cookie)] = cookie
+        }
+    }
+
+    private static func cookieKey(_ cookie: HTTPCookie) -> String {
+        "\(cookie.name)|\(cookie.domain)|\(cookie.path)"
+    }
+
+    private static func cookie(_ cookie: HTTPCookie, appliesTo url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        if let expires = cookie.expiresDate, expires <= Date() {
+            return false
+        }
+        if cookie.isSecure && url.scheme?.lowercased() != "https" {
+            return false
+        }
+
+        let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let domainMatches = host == domain || host.hasSuffix("." + domain)
+        guard domainMatches else { return false }
+
+        let path = cookie.path.isEmpty ? "/" : cookie.path
+        return url.path.hasPrefix(path)
+    }
+
+    /// Decodes the body using the declared charset, falling back to UTF-8.
+    private func decodedBody(_ data: Data, response: HTTPURLResponse) -> String {
+        if let encodingName = response.textEncodingName,
+            let encoding = String.Encoding(charSetName: encodingName),
+            let body = String(data: data, encoding: encoding)
+        {
+            return body
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Hides query strings, which may contain tokens, from diagnostics.
+    private static func redactedURL(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.host ?? "unknown"
+        }
+        if components.query != nil {
+            components.query = "..."
+        }
+        components.fragment = nil
+        return components.string ?? url.absoluteString
+    }
+
+    /// Performs the request with manual redirect handling.
     ///
-    /// The comparison is case-insensitive. A plain host allows the host itself
-    /// and its subdomains, as required by the allowlist contract.
-    private func matchHost(_ pattern: String, _ host: String) -> Bool {
+    /// `RedirectBlocker` prevents `URLSession` from following redirects, so
+    /// this loop is the only place that can authorise a new host.
+    private func performWithRedirectHandling(
+        _ request: URLRequest,
+        redirectCount: Int
+    ) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request, delegate: redirectBlocker)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RequestHandlerError.invalidResponse
+        }
+
+        if let redirectURL = redirectTarget(for: httpResponse, relativeTo: request.url) {
+            guard redirectCount < policy.maxRedirects else {
+                throw RequestHandlerError.maxRedirectsExceeded
+            }
+
+            try validateScheme(redirectURL)
+            try validateHost(redirectURL)
+
+            var newRequest = URLRequest(url: redirectURL)
+            newRequest.httpMethod = request.httpMethod
+            newRequest.allHTTPHeaderFields = request.allHTTPHeaderFields
+
+            // 301/302/303 turn a non-GET request into GET, matching browsers
+            // and `NativeBridgeImpl`. 307/308 preserve method and body.
+            let status = httpResponse.statusCode
+            let downgradesToGET = status == 301 || status == 302 || status == 303
+            if downgradesToGET, request.httpMethod != "GET", request.httpMethod != "HEAD" {
+                newRequest.httpMethod = "GET"
+                newRequest.httpBody = nil
+                newRequest.setValue(nil, forHTTPHeaderField: "Content-Type")
+                newRequest.setValue(nil, forHTTPHeaderField: "Content-Length")
+            } else {
+                newRequest.httpBody = request.httpBody
+            }
+
+            // Never forward credentials across hosts.
+            if redirectURL.host?.lowercased() != request.url?.host?.lowercased() {
+                newRequest.setValue(nil, forHTTPHeaderField: "Authorization")
+            }
+
+            applyCookies(for: redirectURL, to: &newRequest)
+
+            return try await performWithRedirectHandling(newRequest, redirectCount: redirectCount + 1)
+        }
+
+        let data = try await Self.collect(bytes, limit: policy.maxResponseBytes)
+        return (data, response)
+    }
+
+    private func redirectTarget(for response: HTTPURLResponse, relativeTo base: URL?) -> URL? {
+        guard (300...399).contains(response.statusCode) else {
+            return nil
+        }
+        guard
+            let location = response.value(forHTTPHeaderField: "Location")
+                ?? response.allHeaderFields["Location"] as? String
+        else {
+            return nil
+        }
+        return URL(string: location, relativeTo: base)
+    }
+
+    private static func collect(_ bytes: URLSession.AsyncBytes, limit: Int) async throws -> Data {
+        var data = Data()
+        data.reserveCapacity(min(limit, 64 * 1024))
+        for try await byte in bytes {
+            if data.count >= limit {
+                throw RequestHandlerError.responseTooLarge(limit: limit)
+            }
+            data.append(byte)
+        }
+        return data
+    }
+}
+
+/// Rejects every HTTP redirect so `PluginRequestHandler` can validate each hop.
+private final class RedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
+/// Host matching shared by the request handler and the JS bridge.
+enum HostMatcher {
+    /// Matches a host against a pattern (case-insensitive, subdomain-aware).
+    static func matches(pattern: String, host: String) -> Bool {
         let pattern = pattern.lowercased()
         let host = host.lowercased()
+        guard !pattern.isEmpty else { return false }
 
         if pattern == host {
             return true
@@ -225,45 +433,27 @@ public actor PluginRequestHandler {
         return host.hasSuffix("." + pattern)
     }
 
-    /// Performs the request with manual redirect handling.
-    private func performWithRedirectHandling(_ request: URLRequest, redirectCount: Int) async throws -> (
-        Data, URLResponse
-    ) {
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            return (data, response)
-        }
-
-        // Handle redirects manually to enforce maxRedirects
-        if (300...399).contains(httpResponse.statusCode),
-            let location = httpResponse.allHeaderFields["Location"] as? String,
-            let redirectURL = URL(string: location, relativeTo: request.url)
-        {
-            if redirectCount >= policy.maxRedirects {
-                throw RequestHandlerError.maxRedirectsExceeded
+    static func isAllowed(host: String, patterns: [String], baseURL: String) -> Bool {
+        let effective: [String]
+        if patterns.isEmpty {
+            guard let baseHost = URL(string: baseURL)?.host, !baseHost.isEmpty else {
+                return false
             }
-
-            try validateHost(redirectURL)
-
-            var newRequest = URLRequest(url: redirectURL)
-            newRequest.httpMethod = request.httpMethod
-            newRequest.allHTTPHeaderFields = request.allHTTPHeaderFields
-            newRequest.httpBody = request.httpBody
-
-            // Re-apply cookies for redirect
-            if policy.cookieHandling == .automatic {
-                let cookies = cookieStorage.cookies(for: redirectURL) ?? []
-                let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)
-                for (field, value) in cookieHeader {
-                    newRequest.setValue(value, forHTTPHeaderField: field)
-                }
-            }
-
-            return try await performWithRedirectHandling(newRequest, redirectCount: redirectCount + 1)
+            effective = [baseHost]
+        } else {
+            effective = patterns
         }
+        return effective.contains { matches(pattern: $0, host: host) }
+    }
+}
 
-        return (data, response)
+extension String.Encoding {
+    fileprivate init?(charSetName: String) {
+        let cfEncoding = CFStringConvertIANACharSetNameToEncoding(charSetName as CFString)
+        guard cfEncoding != kCFStringEncodingInvalidId else {
+            return nil
+        }
+        self = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEncoding))
     }
 }
 
@@ -459,23 +649,21 @@ public final class PluginBridge: @unchecked Sendable {
     }
 
     /// Checks if a URL is allowed by the policy.
+    ///
+    /// Mirrors `PluginRequestHandler`: an empty allowlist falls back to the
+    /// policy's base host and never allows every host.
     public nonisolated func isAllowed(_ url: String) -> Bool {
         guard let url = URL(string: url), let host = url.host else { return false }
-        return policy.allowedHosts.isEmpty || policy.allowedHosts.contains { matchHost($0, host) }
+        return HostMatcher.isAllowed(
+            host: host,
+            patterns: policy.allowedHosts,
+            baseURL: policy.baseURL
+        )
     }
 
     /// Disposes all resources (timers, etc.).
     public func dispose() {
         timerManager.dispose()
-    }
-
-    private func matchHost(_ pattern: String, _ host: String) -> Bool {
-        if pattern == host { return true }
-        if pattern.hasPrefix("*.") {
-            let suffix = String(pattern.dropFirst(2))
-            return host.hasSuffix(suffix) || host == suffix
-        }
-        return false
     }
 }
 

@@ -28,12 +28,6 @@ let package = Package(
             path: "Sources/ReaderCore",
             resources: [
                 .copy("PluginEngine/Runtime/Resources/runtime.js")
-            ],
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency"),
-                .define("DEBUG", .when(configuration: .debug)),
-                .unsafeFlags(["-enable-bare-slash-regex"]),
-                .enableUpcomingFeature("StrictConcurrency"),
             ]
         ),
         .testTarget(
@@ -42,9 +36,6 @@ let package = Package(
             path: "Tests/ReaderCoreTests",
             resources: [
                 .copy("Resources/Contract/fixtures/v1")
-            ],
-            swiftSettings: [
-                .unsafeFlags(["-Xlinker", "-no_application_extension"])
             ],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-no_application_extension"])

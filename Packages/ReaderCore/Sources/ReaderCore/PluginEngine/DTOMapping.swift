@@ -56,8 +56,22 @@ extension MangaDetails {
 @MainActor
 extension Chapter {
     /// Builds a chapter entity, optionally attached to its manga.
-    public func makeEntity(manga: MangaEntity? = nil, pageCount: Int = 0) -> ChapterEntity {
-        let entity = ChapterEntity(id: key, pageCount: pageCount)
+    ///
+    /// When `siteProfileID` is provided, the identifier is scoped to the site
+    /// profile so two sites cannot collide on the same adapter key.
+    public func makeEntity(
+        manga: MangaEntity? = nil,
+        pageCount: Int = 0,
+        siteProfileID: String? = nil
+    ) -> ChapterEntity {
+        let identifier =
+            siteProfileID.map { "\($0)::\(key)" }
+            ?? key
+        let entity = ChapterEntity(
+            id: identifier,
+            sourceKey: siteProfileID == nil ? nil : key,
+            pageCount: pageCount
+        )
         apply(to: entity, manga: manga)
         return entity
     }

@@ -3,6 +3,23 @@
 import Foundation
 import SwiftData
 
+// MARK: - Persistence Errors
+
+/// Errors raised by the persistence coordinator.
+public enum PersistenceError: Error, LocalizedError, Sendable {
+    case transactionAlreadyInProgress
+    case nestedTransaction
+
+    public var errorDescription: String? {
+        switch self {
+        case .transactionAlreadyInProgress:
+            return "A persistence transaction is already in progress"
+        case .nestedTransaction:
+            return "Nested persistence transactions are not supported"
+        }
+    }
+}
+
 // MARK: - Persistence Coordinator
 
 /// Owns the SwiftData context and coordinates saves inside transactions.
@@ -10,7 +27,7 @@ import SwiftData
 final class PersistenceCoordinator {
     let context: ModelContext
 
-    private var transactionDepth = 0
+    private var isInTransaction = false
 
     init(container: ModelContainer) {
         self.context = container.mainContext
@@ -19,22 +36,35 @@ final class PersistenceCoordinator {
     /// Saves immediately unless a transaction is in progress. Transactions
     /// persist once at commit time so they can still be rolled back.
     func save() throws {
-        guard transactionDepth == 0 else { return }
+        guard !isInTransaction else { return }
         try context.save()
     }
 
-    func beginTransaction() {
-        transactionDepth += 1
+    /// Starts a transaction. Nested transactions are rejected instead of being
+    /// flattened by a counter, so a failure always rolls back the whole unit.
+    func beginTransaction() throws {
+        guard !isInTransaction else {
+            throw PersistenceError.transactionAlreadyInProgress
+        }
+        isInTransaction = true
     }
 
     func commitTransaction() throws {
-        transactionDepth = max(0, transactionDepth - 1)
-        guard transactionDepth == 0 else { return }
+        guard isInTransaction else { return }
+        isInTransaction = false
         try context.save()
     }
 
     func rollbackTransaction() {
-        transactionDepth = 0
+        isInTransaction = false
+        context.rollback()
+    }
+
+    /// Rolls back pending changes only when no transaction owns the context.
+    func rollbackOutsideTransaction() throws {
+        guard !isInTransaction else {
+            throw PersistenceError.transactionAlreadyInProgress
+        }
         context.rollback()
     }
 }
@@ -70,11 +100,11 @@ public final class SwiftDataPersistenceManager: PersistenceManager {
     }
 
     public func rollback() async throws {
-        coordinator.rollbackTransaction()
+        try coordinator.rollbackOutsideTransaction()
     }
 
     public func performInTransaction<T>(_ operation: () async throws -> T) async throws -> T {
-        coordinator.beginTransaction()
+        try coordinator.beginTransaction()
         do {
             let result = try await operation()
             try coordinator.commitTransaction()

@@ -15,6 +15,8 @@ public enum ImagePipelineError: Error, LocalizedError, Sendable, Equatable {
     case timeout
     case diskSpaceExhausted
     case invalidCacheConfiguration
+    case hostNotAllowed(String)
+    case responseTooLarge(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -40,6 +42,10 @@ public enum ImagePipelineError: Error, LocalizedError, Sendable, Equatable {
             return "Disk space exhausted"
         case .invalidCacheConfiguration:
             return "Invalid cache configuration"
+        case .hostNotAllowed(let host):
+            return "Image host is not allowed: \(host)"
+        case .responseTooLarge(let limit):
+            return "Image exceeds the \(limit)-byte limit"
         }
     }
 }

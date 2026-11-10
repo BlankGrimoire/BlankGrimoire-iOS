@@ -5,6 +5,40 @@ import SwiftData
 
 // MARK: - SwiftData Repository Implementation
 
+/// Inserts a model only when it is not already attached to a context.
+///
+/// `ModelContext.insert` is not an upsert: calling it for an object that was
+/// fetched from the same context can create duplicate rows when the model's
+/// unique attribute is not enforced by the store.
+@MainActor
+private func insertIfNeeded<T: PersistentModel>(_ model: T, into context: ModelContext) {
+    if model.modelContext == nil {
+        context.insert(model)
+    }
+}
+
+/// Removes a downloaded page file.
+///
+/// Only paths inside the app's own container are deleted: `localPath` comes
+/// from persisted data and must never be able to delete arbitrary files.
+@MainActor
+private func removeDownloadedFile(at path: String?) {
+    guard let path, !path.isEmpty else { return }
+    let url = URL(fileURLWithPath: path).standardizedFileURL
+
+    let fileManager = FileManager.default
+    let roots = [
+        fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first,
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask).first,
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+    ].compactMap { $0?.standardizedFileURL.path }
+
+    guard roots.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) else {
+        return
+    }
+    try? fileManager.removeItem(at: url)
+}
+
 @MainActor
 final class SwiftDataMangaRepository: MangaRepository {
     private let coordinator: PersistenceCoordinator
@@ -71,7 +105,7 @@ final class SwiftDataMangaRepository: MangaRepository {
 
     func save(_ manga: MangaEntity) async throws {
         manga.updatedAt = Date()
-        context.insert(manga)
+        insertIfNeeded(manga, into: context)
         try coordinator.save()
     }
 
@@ -139,19 +173,20 @@ final class SwiftDataChapterRepository: ChapterRepository {
 
     func save(_ chapter: ChapterEntity) async throws {
         chapter.updatedAt = Date()
-        context.insert(chapter)
+        insertIfNeeded(chapter, into: context)
         try coordinator.save()
     }
 
     func saveAll(_ chapters: [ChapterEntity]) async throws {
         for chapter in chapters {
             chapter.updatedAt = Date()
-            context.insert(chapter)
+            insertIfNeeded(chapter, into: context)
         }
         try coordinator.save()
     }
 
     func delete(_ chapter: ChapterEntity) async throws {
+        try deletePages(for: chapter)
         context.delete(chapter)
         try coordinator.save()
     }
@@ -159,9 +194,22 @@ final class SwiftDataChapterRepository: ChapterRepository {
     func deleteAll(for mangaId: String) async throws {
         let chapters = try await fetchByMangaId(mangaId)
         for chapter in chapters {
+            try deletePages(for: chapter)
             context.delete(chapter)
         }
         try coordinator.save()
+    }
+
+    /// Deletes a chapter's pages and their downloaded files.
+    private func deletePages(for chapter: ChapterEntity) throws {
+        let chapterID = chapter.id
+        let descriptor = FetchDescriptor<PageEntity>(
+            predicate: #Predicate { $0.chapter?.id == chapterID }
+        )
+        for page in try context.fetch(descriptor) {
+            removeDownloadedFile(at: page.localPath)
+            context.delete(page)
+        }
     }
 
     func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {
@@ -205,18 +253,19 @@ final class SwiftDataPageRepository: PageRepository {
     }
 
     func save(_ page: PageEntity) async throws {
-        context.insert(page)
+        insertIfNeeded(page, into: context)
         try coordinator.save()
     }
 
     func saveAll(_ pages: [PageEntity]) async throws {
         for page in pages {
-            context.insert(page)
+            insertIfNeeded(page, into: context)
         }
         try coordinator.save()
     }
 
     func delete(_ page: PageEntity) async throws {
+        removeDownloadedFile(at: page.localPath)
         context.delete(page)
         try coordinator.save()
     }
@@ -224,16 +273,38 @@ final class SwiftDataPageRepository: PageRepository {
     func deleteAll(for chapterId: String) async throws {
         let pages = try await fetchByChapterId(chapterId)
         for page in pages {
+            removeDownloadedFile(at: page.localPath)
             context.delete(page)
         }
         try coordinator.save()
     }
 
+    func replaceAll(for chapterId: String, with pages: [PageEntity]) async throws {
+        try coordinator.beginTransaction()
+        do {
+            let existing = try await fetchByChapterId(chapterId)
+            for page in existing {
+                removeDownloadedFile(at: page.localPath)
+                context.delete(page)
+            }
+            for page in pages {
+                insertIfNeeded(page, into: context)
+            }
+            try coordinator.commitTransaction()
+        } catch {
+            coordinator.rollbackTransaction()
+            throw error
+        }
+    }
+
     func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {
         guard let page = try await fetchById(pageId) else { return }
+        if !isDownloaded {
+            removeDownloadedFile(at: page.localPath)
+        }
         page.isDownloaded = isDownloaded
         page.downloadedAt = isDownloaded ? Date() : nil
-        page.localPath = localPath
+        page.localPath = isDownloaded ? localPath : nil
         try coordinator.save()
     }
 }
@@ -274,7 +345,7 @@ final class SwiftDataReadingProgressRepository: ReadingProgressRepository {
     }
 
     func save(_ progress: ReadingProgressEntity) async throws {
-        context.insert(progress)
+        insertIfNeeded(progress, into: context)
         try coordinator.save()
     }
 
@@ -324,7 +395,7 @@ final class SwiftDataBookmarkRepository: BookmarkRepository {
     }
 
     func save(_ bookmark: BookmarkEntity) async throws {
-        context.insert(bookmark)
+        insertIfNeeded(bookmark, into: context)
         try coordinator.save()
     }
 

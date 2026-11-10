@@ -19,15 +19,30 @@ public final class SitesViewModel {
     private let siteProfileRepository: any SiteProfileRepository
     private let themeSource: any ThemeSource
     private let themeDetector: (any SiteThemeDetecting)?
+    private let mangaRepository: (any MangaRepository)?
+    private let chapterRepository: (any ChapterRepository)?
+    private let pageRepository: (any PageRepository)?
+    private let readingProgressRepository: (any ReadingProgressRepository)?
+    private let bookmarkRepository: (any BookmarkRepository)?
 
     public init(
         siteProfileRepository: any SiteProfileRepository,
         themeSource: any ThemeSource,
-        themeDetector: (any SiteThemeDetecting)? = nil
+        themeDetector: (any SiteThemeDetecting)? = nil,
+        mangaRepository: (any MangaRepository)? = nil,
+        chapterRepository: (any ChapterRepository)? = nil,
+        pageRepository: (any PageRepository)? = nil,
+        readingProgressRepository: (any ReadingProgressRepository)? = nil,
+        bookmarkRepository: (any BookmarkRepository)? = nil
     ) {
         self.siteProfileRepository = siteProfileRepository
         self.themeSource = themeSource
         self.themeDetector = themeDetector
+        self.mangaRepository = mangaRepository
+        self.chapterRepository = chapterRepository
+        self.pageRepository = pageRepository
+        self.readingProgressRepository = readingProgressRepository
+        self.bookmarkRepository = bookmarkRepository
     }
 
     public func loadProfiles() async {
@@ -54,7 +69,7 @@ public final class SitesViewModel {
     public func addSite(url: String, name: String, themeID: String) async -> Bool {
         lastError = nil
 
-        guard let baseURL = SiteURL.baseURLString(from: url) else {
+        guard let baseURL = SiteURL.siteBaseURLString(from: url) else {
             lastError = SiteProfileError.invalidURL(url)
             return false
         }
@@ -118,6 +133,7 @@ public final class SitesViewModel {
 
     public func deleteProfile(_ profile: SiteProfile) async {
         do {
+            try await deleteContent(for: profile)
             try await siteProfileRepository.delete(profile)
             await loadProfiles()
         } catch {
@@ -132,11 +148,37 @@ public final class SitesViewModel {
 
         do {
             for profile in profiles {
+                try await deleteContent(for: profile)
                 try await siteProfileRepository.delete(profile)
             }
             await loadProfiles()
         } catch {
             lastError = error
+        }
+    }
+
+    /// Deletes the library content that belongs to a site profile.
+    ///
+    /// Without this, removing a site leaves manga, chapters, pages, progress and
+    /// bookmarks that no adapter can ever load again.
+    private func deleteContent(for profile: SiteProfile) async throws {
+        if let host = URL(string: profile.baseURL)?.host {
+            ChallengeCookieStore.shared.removeCookies(forHost: host)
+        }
+
+        guard let mangaRepository else { return }
+
+        let manga = try await mangaRepository.fetchAll().filter { $0.siteProfileID == profile.id }
+        for entry in manga {
+            if let chapterRepository {
+                let chapters = try await chapterRepository.fetchByMangaId(entry.id)
+                for chapter in chapters {
+                    try await pageRepository?.deleteAll(for: chapter.id)
+                }
+            }
+            try await readingProgressRepository?.deleteAll(for: entry.id)
+            try await bookmarkRepository?.deleteAll(for: entry.id)
+            try await mangaRepository.delete(entry)
         }
     }
 

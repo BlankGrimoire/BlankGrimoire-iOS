@@ -8,6 +8,7 @@ SDK_RELEASE_URL = https://github.com/BlankGrimoire/BlankGrimoire-sdk/releases/do
 # Vendored SDK assets
 RUNTIME_JS = Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources/runtime.js
 TEST_FIXTURES = Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures
+SDK_ASSETS_SUMS = sdk-assets.sha256
 
 # Project
 PROJECT_YML = project.yml
@@ -30,7 +31,17 @@ XCODEGEN = xcodegen
 # xcodebuild
 XCODEBUILD = xcodebuild
 SCHEME = BlankGrimoire
-DESTINATION ?= platform=iOS Simulator,name=iPhone 17
+# Pick the first available iPhone simulator instead of hardcoding a model that
+# depends on the installed Xcode version.
+DEFAULT_SIMULATOR := $(shell bash scripts/default-simulator.sh 2>/dev/null)
+DESTINATION ?= platform=iOS Simulator,name=$(DEFAULT_SIMULATOR)
+
+# SDK version declared by the SDK repository. Prefer a JSON parser over
+# grep/sed so formatting changes in package.json cannot corrupt the version.
+SDK_PACKAGE_VERSION := $(shell node -p "require(require('path').resolve('$(SDK_REPO_PATH)', 'package.json')).version" 2>/dev/null)
+# The vendored pin is explicit: syncing local assets never changes it unless
+# the caller passes SDK_VERSION=<version> on the command line.
+SDK_VERSION ?= $(shell cat $(SDK_VERSION_FILE) 2>/dev/null)
 
 # Colors
 GREEN = \033[0;32m
@@ -38,7 +49,8 @@ YELLOW = \033[1;33m
 RED = \033[0;31m
 NC = \033[0m
 
-.PHONY: help gen generate build test format lint sync-sdk sync-sdk-release clean clean-xattrs test-readercore
+.PHONY: help gen generate build test format lint sync-sdk sync-sdk-release \
+	verify-sdk update-sdk-assets clean clean-xattrs test-readercore ci
 
 help:
 	@echo "$(GREEN)BlankGrimoire iOS Makefile$(NC)"
@@ -46,17 +58,20 @@ help:
 	@echo "Usage:"
 	@echo "  make gen           Generate Xcode project with xcodegen (alias: generate)"
 	@echo "  make build         Build app for simulator"
-	@echo "  make test          Run unit tests"
+	@echo "  make test          Run app unit tests"
+	@echo "  make test-readercore  Run ReaderCore package tests"
 	@echo "  make format        Format code with swift-format"
 	@echo "  make lint          Lint code with swift-format"
+	@echo "  make verify-sdk    Verify vendored SDK assets against $(SDK_ASSETS_SUMS)"
 	@echo "  make sync-sdk      Sync SDK from local repo (SDK_REPO_PATH=../BlankGrimoire-sdk)"
 	@echo "  make sync-sdk-release  Sync SDK from GitHub release (uses .sdk-version)"
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Variables:"
 	@echo "  SDK_REPO_PATH      Path to SDK repo (default: ../BlankGrimoire-sdk)"
+	@echo "  SDK_VERSION        Version to pin in .sdk-version (default: current pin)"
 	@echo "  SCHEME             Xcode scheme (default: BlankGrimoire)"
-	@echo "  DESTINATION        Simulator destination (default: iPhone 17)"
+	@echo "  DESTINATION        Simulator destination (default: first available iPhone)"
 	@echo "  SWIFT_TEST_FLAGS   Extra flags for swift test"
 	@echo "  READERCORE_SCRATCH SwiftPM scratch path (default: ~/Library/Caches/BlankGrimoire/ReaderCoreBuild)"
 
@@ -78,7 +93,7 @@ build: generate
 		GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
 test: generate
-	@echo "$(GREEN)Running tests...$(NC)"
+	@echo "$(GREEN)Running app tests...$(NC)"
 	$(XCODEBUILD) test \
 		-project $(XCODE_PROJECT) \
 		-scheme $(SCHEME) \
@@ -93,6 +108,13 @@ lint:
 	@echo "$(GREEN)Linting code...$(NC)"
 	$(SWIFT_FORMAT) lint --configuration $(SWIFT_FORMAT_CONFIG) --recursive .
 
+verify-sdk:
+	@echo "$(GREEN)Verifying vendored SDK assets...$(NC)"
+	@bash scripts/verify-sdk-assets.sh
+
+update-sdk-assets:
+	@bash scripts/update-sdk-assets.sh
+
 # SDK Synchronization
 sync-sdk:
 	@echo "$(GREEN)Syncing SDK from $(SDK_REPO_PATH)...$(NC)"
@@ -100,17 +122,24 @@ sync-sdk:
 		echo "$(RED)SDK repo not found at $(SDK_REPO_PATH)$(NC)"; \
 		exit 1; \
 	fi
-	@SDK_VERSION=$$(cat $(SDK_REPO_PATH)/package.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/'); \
-	echo "$$SDK_VERSION" > $(SDK_VERSION_FILE); \
-	echo "$(GREEN)SDK version: $$SDK_VERSION$(NC)"; \
-	mkdir -p Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources; \
-	cp $(SDK_REPO_PATH)/packages/runtime/dist/runtime.js $(RUNTIME_JS); \
-	echo "$(GREEN)Copied runtime.js to ReaderCore$(NC)"; \
-	rm -rf $(TEST_FIXTURES); \
-	mkdir -p $(TEST_FIXTURES); \
-	cp -r $(SDK_REPO_PATH)/fixtures/v1 $(TEST_FIXTURES)/v1; \
-	echo "$(GREEN)Copied fixtures/v1 to ReaderCore tests$(NC)"; \
-	echo "$(GREEN)SDK sync complete! Version $$SDK_VERSION saved to $(SDK_VERSION_FILE)$(NC)"
+	@if [ -z "$(SDK_VERSION)" ]; then \
+		echo "$(RED)Unable to determine the SDK version; pass SDK_VERSION=<version>$(NC)"; \
+		exit 1; \
+	fi
+	@if [ -n "$(SDK_PACKAGE_VERSION)" ] && [ "$(SDK_PACKAGE_VERSION)" != "$(SDK_VERSION)" ]; then \
+		echo "$(YELLOW)Warning: SDK package.json declares $(SDK_PACKAGE_VERSION); keeping pinned $(SDK_VERSION)$(NC)"; \
+	fi
+	@echo "$(SDK_VERSION)" > $(SDK_VERSION_FILE)
+	@echo "$(GREEN)SDK version: $(SDK_VERSION)$(NC)"
+	@mkdir -p $(dir $(RUNTIME_JS))
+	@cp $(SDK_REPO_PATH)/packages/runtime/dist/runtime.js $(RUNTIME_JS)
+	@echo "$(GREEN)Copied runtime.js to ReaderCore$(NC)"
+	@rm -rf $(TEST_FIXTURES)
+	@mkdir -p $(TEST_FIXTURES)
+	@cp -R $(SDK_REPO_PATH)/fixtures/v1 $(TEST_FIXTURES)/
+	@echo "$(GREEN)Copied fixtures/v1 to ReaderCore tests$(NC)"
+	@bash scripts/update-sdk-assets.sh
+	@echo "$(GREEN)SDK sync complete! Version $(SDK_VERSION) saved to $(SDK_VERSION_FILE)$(NC)"
 
 sync-sdk-release:
 	@echo "$(GREEN)Syncing SDK from GitHub release...$(NC)"
@@ -118,20 +147,29 @@ sync-sdk-release:
 		echo "$(RED).sdk-version file not found$(NC)"; \
 		exit 1; \
 	fi
+	@if [ ! -f $(SDK_ASSETS_SUMS) ]; then \
+		echo "$(RED)$(SDK_ASSETS_SUMS) not found; run make sync-sdk first$(NC)"; \
+		exit 1; \
+	fi
 	@SDK_VERSION=$$(cat $(SDK_VERSION_FILE)); \
 	echo "$(GREEN)SDK version from .sdk-version: $$SDK_VERSION$(NC)"; \
 	RELEASE_URL="$(SDK_RELEASE_URL)/v$$SDK_VERSION"; \
 	TEMP_DIR=$$(mktemp -d); \
+	trap 'rm -rf "$$TEMP_DIR"' EXIT; \
+	STAGE="$$TEMP_DIR/stage"; \
+	mkdir -p "$$STAGE/$$(dirname $(RUNTIME_JS))" "$$STAGE/$(TEST_FIXTURES)"; \
 	echo "$(YELLOW)Downloading runtime.js...$(NC)"; \
-	curl -L "$$RELEASE_URL/runtime.js" -o "$$TEMP_DIR/runtime.js" || { echo "$(RED)Failed to download runtime.js$(NC)"; exit 1; }; \
-	mkdir -p Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources; \
-	cp "$$TEMP_DIR/runtime.js" $(RUNTIME_JS); \
+	curl -fsSL --retry 3 "$$RELEASE_URL/runtime.js" -o "$$STAGE/$(RUNTIME_JS)" || { echo "$(RED)Failed to download runtime.js$(NC)"; exit 1; }; \
 	echo "$(YELLOW)Downloading fixtures-v1.tar.gz...$(NC)"; \
-	curl -L "$$RELEASE_URL/fixtures-v1.tar.gz" -o "$$TEMP_DIR/fixtures-v1.tar.gz" || { echo "$(RED)Failed to download fixtures-v1.tar.gz$(NC)"; exit 1; }; \
+	curl -fsSL --retry 3 "$$RELEASE_URL/fixtures-v1.tar.gz" -o "$$TEMP_DIR/fixtures-v1.tar.gz" || { echo "$(RED)Failed to download fixtures-v1.tar.gz$(NC)"; exit 1; }; \
+	tar -xzf "$$TEMP_DIR/fixtures-v1.tar.gz" -C "$$STAGE/$(TEST_FIXTURES)" || { echo "$(RED)Failed to extract fixtures-v1.tar.gz$(NC)"; exit 1; }; \
+	cp $(SDK_VERSION_FILE) $(SDK_ASSETS_SUMS) "$$STAGE/"; \
+	echo "$(YELLOW)Verifying downloaded assets...$(NC)"; \
+	bash scripts/verify-sdk-assets.sh "$$STAGE" || { echo "$(RED)Downloaded SDK assets do not match $(SDK_ASSETS_SUMS)$(NC)"; exit 1; }; \
 	rm -rf $(TEST_FIXTURES); \
-	mkdir -p $(TEST_FIXTURES); \
-	tar -xzf "$$TEMP_DIR/fixtures-v1.tar.gz" -C $(TEST_FIXTURES); \
-	rm -rf "$$TEMP_DIR"; \
+	mkdir -p "$$(dirname $(RUNTIME_JS))" "$(TEST_FIXTURES)"; \
+	cp "$$STAGE/$(RUNTIME_JS)" $(RUNTIME_JS); \
+	cp -R "$$STAGE/$(TEST_FIXTURES)/." "$(TEST_FIXTURES)/"; \
 	echo "$(GREEN)SDK release sync complete!$(NC)"
 
 # Strip extended attributes that cause code signing issues on macOS. This is a
@@ -157,8 +195,10 @@ clean:
 	rm -rf $(XCODE_PROJECT)
 	rm -rf .build
 	rm -rf DerivedData
-	rm -rf BlankGrimoire/Resources
+	rm -rf build
+	rm -rf release
+	rm -rf "$(READERCORE_SCRATCH)"
 
 # CI
-ci: generate test lint
+ci: verify-sdk lint test-readercore test build
 	@echo "$(GREEN)CI pipeline complete!$(NC)"

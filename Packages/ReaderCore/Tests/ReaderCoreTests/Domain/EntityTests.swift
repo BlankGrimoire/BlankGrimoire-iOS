@@ -125,7 +125,7 @@ final class DomainEntityTests: XCTestCase {
 
         XCTAssertEqual(manga.lastReadChapterId, "chapter-1")
         XCTAssertEqual(manga.lastReadPageIndex, 5)
-        XCTAssertEqual(manga.readingProgress, 5.0 / 20.0, accuracy: 0.001)
+        XCTAssertEqual(manga.readingProgress, 6.0 / 20.0, accuracy: 0.001)
     }
 
     // MARK: - Chapter Tests
@@ -205,9 +205,9 @@ final class DomainEntityTests: XCTestCase {
 
         XCTAssertEqual(progress.pageIndex, 5)
         XCTAssertEqual(progress.totalPages, 20)
-        XCTAssertEqual(progress.progress, 0.25)
+        XCTAssertEqual(progress.progress, 0.3)
         XCTAssertEqual(progress.timeSpent, 300)
-        XCTAssertEqual(progress.progressPercentage, 25)
+        XCTAssertEqual(progress.progressPercentage, 30)
     }
 
     // MARK: - Bookmark Tests

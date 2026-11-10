@@ -266,6 +266,8 @@
                 siteURL: result.siteURL
             )
         }
+
+        func refreshChapters(for manga: MangaEntity) async throws {}
     }
 
     @MainActor

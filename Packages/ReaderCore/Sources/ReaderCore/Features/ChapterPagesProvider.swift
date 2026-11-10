@@ -64,10 +64,14 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         )
 
         do {
-            guard let chapterURL = AdapterSession.absoluteURL(chapter.id, baseURL: profile.baseURL) else {
-                throw SiteBrowsingError.invalidSiteURL(chapter.id)
+            let chapterKey = chapter.adapterKey
+            guard let chapterURL = AdapterSession.absoluteURL(chapterKey, baseURL: profile.baseURL) else {
+                throw SiteBrowsingError.invalidSiteURL(chapterKey)
             }
             let response = try await session.bridge.request(HttpRequest(url: chapterURL.absoluteString))
+            if response.status == 403 || response.status == 503 {
+                throw SiteBrowsingError.challengeRequired(chapterURL)
+            }
             guard (200...299).contains(response.status) else {
                 throw SiteBrowsingError.chapterFetchFailed(response.status)
             }
@@ -80,30 +84,19 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
             )
             let extracted = try await session.runtime.pages(
                 mangaKey: manga.adapterKey,
-                chapterKey: chapter.id,
+                chapterKey: chapterKey,
                 in: context
             )
             guard !extracted.isEmpty else {
                 throw SiteBrowsingError.noPages
             }
 
-            let pages =
-                extracted
-                .sorted { $0.index < $1.index }
-                .map { page in
-                    PageEntity(
-                        id: pageIdentifier(chapterID: chapter.id, index: page.index),
-                        index: page.index,
-                        imageURL: page.imageURL,
-                        headers: page.headers
-                    )
-                }
+            let pages = try validatedPages(extracted, chapter: chapter, profile: profile)
             for page in pages {
                 page.chapter = chapter
             }
 
-            try await pageRepository.deleteAll(for: chapter.id)
-            try await pageRepository.saveAll(pages)
+            try await pageRepository.replaceAll(for: chapter.id, with: pages)
 
             chapter.pageCount = pages.count
             chapter.updatedAt = Date()
@@ -115,6 +108,54 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
             await session.dispose()
             throw error
         }
+    }
+
+    /// Validates adapter output before it reaches persistence or the network.
+    private func validatedPages(
+        _ extracted: [Page],
+        chapter: ChapterEntity,
+        profile: SiteProfile
+    ) throws -> [PageEntity] {
+        guard let baseHost = URL(string: profile.baseURL)?.host?.lowercased(), !baseHost.isEmpty else {
+            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
+        }
+
+        var seenIndices = Set<Int>()
+        var pages: [PageEntity] = []
+
+        for page in extracted {
+            guard seenIndices.insert(page.index).inserted else {
+                throw SiteBrowsingError.duplicatePageIndex(page.index)
+            }
+
+            guard
+                let url = URL(string: page.imageURL),
+                url.scheme?.lowercased() == "https",
+                let host = url.host?.lowercased(),
+                HostMatcher.matches(pattern: baseHost, host: host)
+            else {
+                throw SiteBrowsingError.invalidPageURL(page.imageURL)
+            }
+
+            pages.append(
+                PageEntity(
+                    id: pageIdentifier(chapterID: chapter.id, index: page.index),
+                    index: page.index,
+                    imageURL: page.imageURL,
+                    headers: Self.sanitizedHeaders(page.headers)
+                )
+            )
+        }
+
+        return pages.sorted { $0.index < $1.index }
+    }
+
+    /// Removes headers that must be controlled by the native request layer.
+    private static func sanitizedHeaders(_ headers: [String: String]?) -> [String: String]? {
+        guard let headers else { return nil }
+        let reserved: Set<String> = ["host", "cookie", "authorization", "proxy-authorization"]
+        let sanitized = headers.filter { !reserved.contains($0.key.lowercased()) }
+        return sanitized.isEmpty ? nil : sanitized
     }
 
     private func resolveProfile(for manga: MangaEntity) async throws -> SiteProfile {
@@ -132,13 +173,10 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         }
 
         let profiles = try await siteProfileRepository.fetchAll()
-        if let siteURL = manga.siteURL, let host = SiteURL.host(from: siteURL),
+        if let siteURL = manga.siteURL,
+            let host = SiteURL.host(from: siteURL),
             let profile = profiles.first(where: { SiteURL.host(from: $0.baseURL) == host })
         {
-            return profile
-        }
-
-        if profiles.count == 1, let profile = profiles.first {
             return profile
         }
 

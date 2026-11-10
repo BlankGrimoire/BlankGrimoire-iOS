@@ -64,8 +64,8 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         self.lastAccessedAt = lastAccessedAt
         self.customHeaders = customHeaders
         self.cookieHandling = cookieHandling
-        self.maxRedirects = maxRedirects
-        self.timeout = timeout
+        self.maxRedirects = max(0, maxRedirects)
+        self.timeout = max(1, timeout)
     }
 
     /// Creates a SiteContext for use with the plugin engine.

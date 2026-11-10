@@ -52,6 +52,7 @@ final class ReaderViewModelTests: XCTestCase {
 
         await viewModel.load()
         await viewModel.setPage(index: 1)
+        await viewModel.flushProgress()
 
         XCTAssertEqual(progressRepository.progress.first?.pageIndex, 1)
         XCTAssertEqual(progressRepository.progress.first?.progress ?? 0, 1.0, accuracy: 0.001)

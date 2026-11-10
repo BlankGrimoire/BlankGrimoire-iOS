@@ -63,6 +63,8 @@ public struct SiteSearchOutcome: Sendable, Equatable {
 public protocol SiteCatalogProviding: Sendable {
     func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome
     func importManga(_ result: SiteSearchResult) async throws -> MangaEntity
+    /// Refreshes details and chapters for an imported series from its site.
+    func refreshChapters(for manga: MangaEntity) async throws
 }
 
 /// Loads the pages of a chapter through its installed adapter.
@@ -80,6 +82,9 @@ public enum SiteBrowsingError: Error, LocalizedError, Sendable, Equatable {
     case searchFailed(String)
     case chapterFetchFailed(Int)
     case noPages
+    case duplicatePageIndex(Int)
+    case invalidPageURL(String)
+    case challengeRequired(URL)
     case catalogUnavailable
 
     public var errorDescription: String? {
@@ -98,6 +103,12 @@ public enum SiteBrowsingError: Error, LocalizedError, Sendable, Equatable {
             return "The chapter page returned HTTP \(status)"
         case .noPages:
             return "The adapter returned no pages for this chapter"
+        case .duplicatePageIndex(let index):
+            return "The adapter returned duplicate page index \(index)"
+        case .invalidPageURL(let url):
+            return "The adapter returned an invalid page URL: \(url)"
+        case .challengeRequired(let url):
+            return "The site requires a verification before continuing: \(url.absoluteString)"
         case .catalogUnavailable:
             return "Site browsing is unavailable"
         }

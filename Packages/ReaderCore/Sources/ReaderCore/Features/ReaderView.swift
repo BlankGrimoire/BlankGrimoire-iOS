@@ -6,7 +6,8 @@
     /// Native paginated reader for a persisted chapter.
     public struct ReaderView: View {
         private let dependencies: FeaturesDependencies
-        @State private var viewModel: ReaderViewModel
+        @State private var viewModel: ReaderViewModel?
+        @State private var challengeRoute: ChallengeRoute?
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @Environment(\.dismiss) private var dismiss
 
@@ -16,26 +17,39 @@
             dependencies: FeaturesDependencies
         ) {
             self.dependencies = dependencies
-            guard
-                let pageRepository = dependencies.pageRepository,
-                let readingProgressRepository = dependencies.readingProgressRepository
-            else {
-                fatalError("ReaderView requires page and reading-progress repositories")
-            }
 
-            self._viewModel = State(
-                initialValue: ReaderViewModel(
-                    manga: manga,
-                    chapter: chapter,
-                    pageRepository: pageRepository,
-                    readingProgressRepository: readingProgressRepository,
-                    mangaRepository: dependencies.mangaRepository,
-                    chapterPagesProvider: dependencies.chapterPagesProvider
+            if let pageRepository = dependencies.pageRepository,
+                let readingProgressRepository = dependencies.readingProgressRepository
+            {
+                self._viewModel = State(
+                    initialValue: ReaderViewModel(
+                        manga: manga,
+                        chapter: chapter,
+                        pageRepository: pageRepository,
+                        readingProgressRepository: readingProgressRepository,
+                        mangaRepository: dependencies.mangaRepository,
+                        chapterPagesProvider: dependencies.chapterPagesProvider
+                    )
                 )
-            )
+            } else {
+                self._viewModel = State(initialValue: nil)
+            }
         }
 
         public var body: some View {
+            if let viewModel {
+                readerContent(viewModel)
+            } else {
+                ContentUnavailableView(
+                    "Reader Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("The offline reader is not configured on this device.")
+                )
+            }
+        }
+
+        @ViewBuilder
+        private func readerContent(_ viewModel: ReaderViewModel) -> some View {
             Group {
                 if viewModel.isLoading {
                     ProgressView("Loading pages…")
@@ -77,7 +91,7 @@
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         Task {
-                            await viewModel.saveProgress()
+                            await viewModel.flushProgress()
                             dismiss()
                         }
                     }
@@ -92,10 +106,26 @@
             .task {
                 await viewModel.load()
             }
+            .onChange(of: viewModel.challengeURL) { _, url in
+                guard let url else { return }
+                let hosts = Self.allowedHosts(for: viewModel.manga)
+                guard !hosts.isEmpty else { return }
+                challengeRoute = ChallengeRoute(url: url, allowedHosts: hosts)
+            }
+            .sheet(item: $challengeRoute) { route in
+                ChallengeView(
+                    url: route.url,
+                    allowedHosts: route.allowedHosts,
+                    onComplete: {
+                        challengeRoute = nil
+                        Task { await viewModel.reload() }
+                    }
+                )
+            }
             .alert(
                 "Reader Error",
                 isPresented: Binding(
-                    get: { viewModel.lastError != nil },
+                    get: { viewModel.lastError != nil && viewModel.challengeURL == nil },
                     set: { isPresented in
                         if !isPresented {
                             viewModel.lastError = nil
@@ -110,6 +140,20 @@
                 Text(viewModel.lastError?.localizedDescription ?? "")
             }
         }
+
+        private static func allowedHosts(for manga: MangaEntity) -> Set<String> {
+            guard let siteURL = manga.siteURL, let host = URL(string: siteURL)?.host?.lowercased() else {
+                return []
+            }
+            return [host]
+        }
+    }
+
+    private struct ChallengeRoute: Identifiable {
+        let url: URL
+        let allowedHosts: Set<String>
+
+        var id: String { url.absoluteString }
     }
 
     extension ReadingDirection {

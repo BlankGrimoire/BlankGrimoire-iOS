@@ -36,6 +36,11 @@ public typealias ISODateString = String
 public typealias URLString = String
 
 /// Publication status
+/// Manga publication status.
+///
+/// These raw values are persisted by SwiftData: cases may be appended, but
+/// renaming or removing one requires a migration stage in
+/// `BlankGrimoireMigrationPlan` first.
 public enum MangaStatus: String, Codable, Sendable {
     case ongoing
     case completed
@@ -45,6 +50,10 @@ public enum MangaStatus: String, Codable, Sendable {
 }
 
 /// Content rating
+/// Content rating.
+///
+/// Raw values are persisted by SwiftData; add cases, never rename them without
+/// a migration stage in `BlankGrimoireMigrationPlan`.
 public enum ContentRating: String, Codable, Sendable {
     case safe
     case suggestive

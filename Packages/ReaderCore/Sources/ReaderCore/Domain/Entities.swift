@@ -106,11 +106,7 @@ public final class MangaEntity {
     }
 
     public func updateLastRead(chapterId: String, pageIndex: Int, totalPages: Int) {
-        self.lastReadAt = Date()
-        self.lastReadChapterId = chapterId
-        self.lastReadPageIndex = pageIndex
-        self.readingProgress = totalPages > 0 ? Double(pageIndex) / Double(totalPages) : 0.0
-        self.updatedAt = Date()
+        updateReadingPosition(chapterId: chapterId, pageIndex: pageIndex, totalPages: totalPages)
     }
 
     /// Updates the exact reading position, treating the last page as completed.
@@ -136,6 +132,12 @@ public final class MangaEntity {
 @Model
 public final class ChapterEntity {
     @Attribute(.unique) public var id: String
+
+    /// Original adapter key, without the site-profile prefix.
+    ///
+    /// Persisted separately so adapters can receive their own key even though
+    /// the identifier is scoped to the site profile.
+    public var sourceKey: String?
     public var title: String?
     public var number: Double?
     public var volume: Double?
@@ -157,6 +159,7 @@ public final class ChapterEntity {
 
     public init(
         id: String,
+        sourceKey: String? = nil,
         title: String? = nil,
         number: Double? = nil,
         volume: Double? = nil,
@@ -166,6 +169,7 @@ public final class ChapterEntity {
         pageCount: Int = 0
     ) {
         self.id = id
+        self.sourceKey = sourceKey
         self.title = title
         self.number = number
         self.volume = volume
@@ -182,6 +186,20 @@ public final class ChapterEntity {
 
     public var isFullyDownloaded: Bool {
         isDownloaded && downloadedPagesCount >= pageCount && pageCount > 0
+    }
+
+    /// Returns the adapter key, removing the site-profile prefix when present.
+    ///
+    /// Adapters only understand their own keys, while the persisted identifier
+    /// is scoped with `<siteProfileID>::<chapterKey>` to avoid collisions.
+    public var adapterKey: String {
+        if let sourceKey {
+            return sourceKey
+        }
+        guard let mangaProfileID = manga?.siteProfileID else { return id }
+        let prefix = "\(mangaProfileID)::"
+        guard id.hasPrefix(prefix) else { return id }
+        return String(id.dropFirst(prefix.count))
     }
 }
 
@@ -254,7 +272,7 @@ public final class ReadingProgressEntity {
         self.id = id
         self.pageIndex = pageIndex
         self.totalPages = totalPages
-        self.progress = totalPages > 0 ? Double(pageIndex) / Double(totalPages) : 0.0
+        self.progress = totalPages > 0 ? Double(min(pageIndex + 1, totalPages)) / Double(totalPages) : 0.0
         self.readAt = Date()
         self.timeSpent = timeSpent
         self.manga = manga

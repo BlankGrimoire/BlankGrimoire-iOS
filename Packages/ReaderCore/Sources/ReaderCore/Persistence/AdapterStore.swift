@@ -16,6 +16,7 @@ public enum AdapterStoreError: Error, LocalizedError, Sendable, Equatable {
     case sha256Mismatch(expected: String, found: String)
     case adapterNotFound(String)
     case adapterAlreadyInstalled(String)
+    case downgradeNotAllowed(id: String, installed: String, requested: String)
     case repositoryNotTrusted(String)
     case trustOnFirstUseRequired(String)
     case bundleDownloadFailed(String)
@@ -40,6 +41,8 @@ public enum AdapterStoreError: Error, LocalizedError, Sendable, Equatable {
             return "Adapter not found: \(id)"
         case .adapterAlreadyInstalled(let id):
             return "Adapter already installed: \(id)"
+        case .downgradeNotAllowed(let id, let installed, let requested):
+            return "Cannot downgrade \(id) from \(installed) to \(requested)"
         case .repositoryNotTrusted(let url):
             return "Repository not trusted: \(url)"
         case .trustOnFirstUseRequired(let url):
@@ -80,6 +83,17 @@ public enum Ed25519Verifier {
         }
 
         return try Curve25519.Signing.PublicKey(rawRepresentation: keyData)
+    }
+
+    /// Returns whether two `ed25519:BASE64` strings encode the same raw key.
+    public static func publicKeysMatch(_ lhs: String, _ rhs: String) -> Bool {
+        guard
+            let left = try? extractPublicKey(from: lhs).rawRepresentation,
+            let right = try? extractPublicKey(from: rhs).rawRepresentation
+        else {
+            return false
+        }
+        return left == right
     }
 
     /// Verifies a base64-encoded Ed25519 signature over the given data.
@@ -175,8 +189,9 @@ public struct TrustedRepository: Codable, Sendable, Equatable {
     }
 
     public func verifyIndex(_ index: RepositoryIndex) throws {
-        // Verify the public key matches
-        guard index.publicKey == publicKey else {
+        // Public keys are compared on their decoded bytes: base64 padding and
+        // whitespace differences must not change the trust decision.
+        guard Ed25519Verifier.publicKeysMatch(index.publicKey, publicKey) else {
             throw AdapterStoreError.publicKeyMismatch
         }
     }
@@ -190,7 +205,10 @@ public protocol AdapterStore: Sendable {
     func fetchRepositoryIndex(from url: String) async throws -> RepositoryIndex
 
     /// Trusts a repository (TOFU - called after user confirmation).
-    func trustRepository(_ index: RepositoryIndex) async throws
+    ///
+    /// The canonical index URL is part of the trust identity. Implementations
+    /// must persist it instead of deriving an identity from the index name.
+    func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws
 
     /// Checks if a repository is trusted.
     func isRepositoryTrusted(_ url: String) async throws -> Bool
@@ -221,12 +239,15 @@ public protocol AdapterStore: Sendable {
 }
 
 extension AdapterStore {
-    /// Trusts an index while preserving the URL it was fetched from.
+    /// Normalises a repository URL without performing any I/O.
     ///
-    /// The URL is part of the trust identity and must not be inferred from the
-    /// display name in the repository index.
-    public func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws {
-        try await trustRepository(index)
+    /// Kept as a protocol helper so views and tests share one definition of the
+    /// canonical trust identity.
+    public func canonicalRepositoryURL(_ repositoryURL: String) throws -> String {
+        guard let canonical = RepositoryURL.normalizedIndexURL(from: repositoryURL) else {
+            throw AdapterStoreError.invalidRepositoryURL
+        }
+        return canonical.absoluteString
     }
 }
 
@@ -240,15 +261,45 @@ public final class DefaultAdapterStore: AdapterStore {
     private let modelContext: ModelContext
     private let logger: PluginLogger
 
+    /// Repository requests derive a host-scoped policy from the canonical URL.
+    /// The store does not accept a shared request handler because a policy for
+    /// one repository must never authorise another repository or site.
     public init(
         modelContainer: ModelContainer,
-        requestHandler: PluginRequestHandler,
         logger: PluginLogger = ConsolePluginLogger()
     ) throws {
         self.modelContainer = modelContainer
         self.modelContext = modelContainer.mainContext
         self.logger = logger
-        _ = requestHandler
+    }
+
+    /// Removes trust rows whose URL is not a canonical HTTPS index URL.
+    ///
+    /// Older builds inferred the trust identity from the repository display
+    /// name (for example `BlankGrimoire Themes`), producing rows that can never
+    /// match a real request. Valid rows are left untouched.
+    @discardableResult
+    public func purgeInvalidTrustedRepositories() throws -> Int {
+        let descriptor = FetchDescriptor<TrustedRepositoryEntity>()
+        let entities = try modelContext.fetch(descriptor)
+        var removed = 0
+        for entity in entities {
+            let canonical = RepositoryURL.normalizedIndexURL(from: entity.url)?.absoluteString
+            guard canonical == entity.url else {
+                modelContext.delete(entity)
+                removed += 1
+                continue
+            }
+        }
+        if removed > 0 {
+            try modelContext.save()
+            logger.warn(
+                "Removed \(removed) invalid trusted repository entr\(removed == 1 ? "y" : "ies")",
+                level: 1,
+                context: nil
+            )
+        }
+        return removed
     }
 
     // MARK: - Repository Index
@@ -292,39 +343,41 @@ public final class DefaultAdapterStore: AdapterStore {
 
     // MARK: - Trust Management (TOFU)
 
-    public func trustRepository(_ index: RepositoryIndex) async throws {
-        let trusted = TrustedRepository(
-            url: index.name,
-            name: index.name,
-            publicKey: index.publicKey
-        )
-
-        let entity = TrustedRepositoryEntity(trusted: trusted)
-        modelContext.insert(entity)
-        try modelContext.save()
-
-        logger.log("Trusted repository: \(index.name)", level: 0, context: nil)
-    }
-
     public func trustRepository(_ index: RepositoryIndex, from repositoryURL: String) async throws {
         guard let indexURL = RepositoryURL.normalizedIndexURL(from: repositoryURL) else {
             throw AdapterStoreError.invalidRepositoryURL
         }
 
         let canonicalURL = indexURL.absoluteString
-        let trusted = TrustedRepository(
-            url: canonicalURL,
-            name: index.name,
-            publicKey: index.publicKey
+        let descriptor = FetchDescriptor<TrustedRepositoryEntity>(
+            predicate: #Predicate { $0.url == canonicalURL }
         )
-        modelContext.insert(TrustedRepositoryEntity(trusted: trusted))
+
+        if let existing = try modelContext.fetch(descriptor).first {
+            guard Ed25519Verifier.publicKeysMatch(existing.publicKey, index.publicKey) else {
+                throw AdapterStoreError.publicKeyMismatch
+            }
+            existing.name = index.name
+            existing.lastVerifiedAt = Date()
+        } else {
+            let trusted = TrustedRepository(
+                url: canonicalURL,
+                name: index.name,
+                publicKey: index.publicKey
+            )
+            modelContext.insert(TrustedRepositoryEntity(trusted: trusted))
+        }
+
         try modelContext.save()
         logger.log("Trusted repository: \(canonicalURL)", level: 0, context: nil)
     }
 
     public func isRepositoryTrusted(_ url: String) async throws -> Bool {
+        guard let canonicalURL = RepositoryURL.normalizedIndexURL(from: url)?.absoluteString else {
+            return false
+        }
         let descriptor = FetchDescriptor<TrustedRepositoryEntity>(
-            predicate: #Predicate { $0.url == url }
+            predicate: #Predicate { $0.url == canonicalURL }
         )
         let results = try modelContext.fetch(descriptor)
         return !results.isEmpty
@@ -339,8 +392,9 @@ public final class DefaultAdapterStore: AdapterStore {
     }
 
     public func removeTrust(for url: String) async throws {
+        let storedURL = RepositoryURL.normalizedIndexURL(from: url)?.absoluteString ?? url
         let descriptor = FetchDescriptor<TrustedRepositoryEntity>(
-            predicate: #Predicate { $0.url == url }
+            predicate: #Predicate { $0.url == storedURL }
         )
         let entities = try modelContext.fetch(descriptor)
         for entity in entities {
@@ -352,29 +406,39 @@ public final class DefaultAdapterStore: AdapterStore {
     // MARK: - Adapter Installation
 
     public func installAdapter(id: String, version: String, from repositoryURL: String) async throws -> AdapterBundle {
-        // 1. Verify repository is trusted
-        let isTrusted = try await isRepositoryTrusted(repositoryURL)
+        guard let canonicalURL = RepositoryURL.normalizedIndexURL(from: repositoryURL)?.absoluteString else {
+            throw AdapterStoreError.invalidRepositoryURL
+        }
+
+        // 1. Verify repository is trusted by canonical URL.
+        let isTrusted = try await isRepositoryTrusted(canonicalURL)
         guard isTrusted else {
-            throw AdapterStoreError.repositoryNotTrusted(repositoryURL)
+            throw AdapterStoreError.repositoryNotTrusted(canonicalURL)
         }
 
         // 2. Fetch repository index to get extension entry
-        let index = try await fetchRepositoryIndex(from: repositoryURL)
+        let index = try await fetchRepositoryIndex(from: canonicalURL)
 
         guard let entry = index.extensions.first(where: { $0.id == id && $0.version == version }) else {
             throw AdapterStoreError.adapterNotFound("\(id)@\(version)")
         }
 
-        // 3. Check if already installed
+        // 3. Check if already installed and reject downgrades.
         if let existing = try await getInstalledAdapter(id: id) {
             if existing.version == version {
                 throw AdapterStoreError.adapterAlreadyInstalled(id)
             }
-            // Allow upgrade - will replace below
+            guard Self.compareVersions(version, existing.version) == .orderedDescending else {
+                throw AdapterStoreError.downgradeNotAllowed(
+                    id: id,
+                    installed: existing.version,
+                    requested: version
+                )
+            }
         }
 
         // 4. Download bundle
-        let bundleURL = resolveBundleURL(entry.bundleURL, baseURL: repositoryURL)
+        let bundleURL = resolveBundleURL(entry.bundleURL, baseURL: canonicalURL)
         let request = HttpRequest(url: bundleURL, method: "GET")
         let response = try await repositoryRequestHandler(for: bundleURL).perform(request)
 
@@ -387,11 +451,14 @@ public final class DefaultAdapterStore: AdapterStore {
         // 5. Verify SHA-256
         try SHA256Verifier.verify(bundleData, expectedHex: entry.sha256)
 
-        // 6. Verify Ed25519 signature
+        // 6. Verify Ed25519 signature against the trusted key for this URL.
         let trustedRepos = try await listTrustedRepositories()
-        guard let trusted = trustedRepos.first(where: { $0.url == repositoryURL || $0.name == repositoryURL }) else {
-            throw AdapterStoreError.repositoryNotTrusted(repositoryURL)
+        guard let trusted = trustedRepos.first(where: { $0.url == canonicalURL }) else {
+            throw AdapterStoreError.repositoryNotTrusted(canonicalURL)
         }
+
+        // The index must be signed by the same key the user approved.
+        try trusted.verifyIndex(index)
 
         let publicKey = try Ed25519Verifier.extractPublicKey(from: trusted.publicKey)
         try Ed25519Verifier.verify(
@@ -432,14 +499,14 @@ public final class DefaultAdapterStore: AdapterStore {
             manifest: manifest,
             themeAdapter: themeAdapter,
             bundleData: bundleData,
-            sourceRepositoryURL: repositoryURL
+            sourceRepositoryURL: canonicalURL
         )
 
         let entity = InstalledAdapterEntity(bundle: bundle)
         modelContext.insert(entity)
         try modelContext.save()
 
-        logger.log("Installed adapter: \(id)@\(version) from \(repositoryURL)", level: 0, context: nil)
+        logger.log("Installed adapter: \(id)@\(version) from \(canonicalURL)", level: 0, context: nil)
         return bundle
     }
 
@@ -502,6 +569,15 @@ public final class DefaultAdapterStore: AdapterStore {
             throw AdapterStoreError.adapterNotFound(id)
         }
 
+        // Reject downgrades before uninstalling the current bundle.
+        guard Self.compareVersions(version, adapter.version) == .orderedDescending else {
+            throw AdapterStoreError.downgradeNotAllowed(
+                id: id,
+                installed: adapter.version,
+                requested: version
+            )
+        }
+
         // Uninstall old version first
         try await uninstallAdapter(id: id)
 
@@ -510,6 +586,20 @@ public final class DefaultAdapterStore: AdapterStore {
     }
 
     // MARK: - Helpers
+
+    /// Compares dotted numeric versions without relying on `Double`.
+    static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let left = lhs.split(separator: ".").map { Int($0) ?? 0 }
+        let right = rhs.split(separator: ".").map { Int($0) ?? 0 }
+        let count = max(left.count, right.count)
+        for index in 0..<count {
+            let l = index < left.count ? left[index] : 0
+            let r = index < right.count ? right[index] : 0
+            if l < r { return .orderedAscending }
+            if l > r { return .orderedDescending }
+        }
+        return .orderedSame
+    }
 
     private func repositoryRequestHandler(for urlString: String) throws -> PluginRequestHandler {
         guard
@@ -524,8 +614,10 @@ public final class DefaultAdapterStore: AdapterStore {
             policy: SiteNetworkPolicy(
                 baseURL: urlString,
                 allowedHosts: [host],
-                maxRedirects: 5,
-                cookieHandling: .none
+                maxRedirects: 3,
+                cookieHandling: .none,
+                timeout: 30,
+                maxResponseBytes: 25 * 1024 * 1024
             ),
             logger: ConsolePluginLogger()
         )
@@ -692,9 +784,7 @@ public final class InstalledAdapterEntity {
 #if DEBUG
     extension DefaultAdapterStore {
         /// Creates an in-memory adapter store for testing.
-        public static func createInMemory(
-            requestHandler: PluginRequestHandler? = nil
-        ) throws -> DefaultAdapterStore {
+        public static func createInMemory() throws -> DefaultAdapterStore {
             let schema = Schema([
                 TrustedRepositoryEntity.self,
                 InstalledAdapterEntity.self,
@@ -707,19 +797,7 @@ public final class InstalledAdapterEntity {
 
             let container = try ModelContainer(for: schema, configurations: [configuration])
 
-            let handler =
-                requestHandler
-                ?? PluginRequestHandler(
-                    policy: SiteNetworkPolicy(
-                        baseURL: "https://example.org",
-                        allowedHosts: ["example.org"]
-                    )
-                )
-
-            return try DefaultAdapterStore(
-                modelContainer: container,
-                requestHandler: handler
-            )
+            return try DefaultAdapterStore(modelContainer: container)
         }
 
         /// Test helper: directly inserts an installed adapter entity.

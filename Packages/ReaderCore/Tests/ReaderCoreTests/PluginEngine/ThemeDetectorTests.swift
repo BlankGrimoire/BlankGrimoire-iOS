@@ -20,7 +20,7 @@ final class ThemeDetectorTests: XCTestCase {
             )
         )
 
-        adapterStore = try await DefaultAdapterStore.createInMemory(requestHandler: requestHandler)
+        adapterStore = try await DefaultAdapterStore.createInMemory()
 
         detector = ThemeDetector(
             adapterStore: adapterStore,

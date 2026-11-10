@@ -14,7 +14,12 @@
                 initialValue: SitesViewModel(
                     siteProfileRepository: dependencies.siteProfileRepository,
                     themeSource: dependencies.themeSource,
-                    themeDetector: dependencies.themeDetector
+                    themeDetector: dependencies.themeDetector,
+                    mangaRepository: dependencies.mangaRepository,
+                    chapterRepository: dependencies.chapterRepository,
+                    pageRepository: dependencies.pageRepository,
+                    readingProgressRepository: dependencies.readingProgressRepository,
+                    bookmarkRepository: dependencies.bookmarkRepository
                 )
             )
         }
