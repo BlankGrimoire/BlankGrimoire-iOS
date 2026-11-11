@@ -45,6 +45,14 @@ private func removeDownloadedFile(at path: String?) {
     try? FileManager.default.removeItem(at: url)
 }
 
+/// Returns whether a SwiftData failure is the older runtime's refusal to
+/// translate captured enum constants in a predicate.
+private func isUnsupportedPredicate(_ error: Error) -> Bool {
+    let description = String(describing: error)
+    return description.contains("unsupportedPredicate")
+        || description.localizedCaseInsensitiveContains("Unsupported Predicate")
+}
+
 @MainActor
 final class SwiftDataMangaRepository: MangaRepository {
     private let coordinator: PersistenceCoordinator
@@ -104,7 +112,16 @@ final class SwiftDataMangaRepository: MangaRepository {
             predicate: #Predicate { $0.status == status },
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
         )
-        return try context.fetch(descriptor)
+        do {
+            return try context.fetch(descriptor)
+        } catch {
+            // Older SwiftData runtimes reject captured enum constants in
+            // predicates (`unsupportedPredicate`). Only that limitation falls
+            // back to an in-memory filter; any other failure is a real error.
+            guard isUnsupportedPredicate(error) else { throw error }
+            let all = try await fetchAll()
+            return all.filter { $0.status == status }
+        }
     }
 
     func fetchByTag(_ tag: String) async throws -> [MangaEntity] {
