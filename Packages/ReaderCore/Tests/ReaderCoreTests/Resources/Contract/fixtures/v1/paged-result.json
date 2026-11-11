@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "key": "lorem-ipsum",
+      "title": "Lorem Ipsum",
+      "coverURL": "https://example.org/covers/lorem-ipsum.jpg"
+    },
+    {
+      "key": "dolor-sit",
+      "title": "Dolor Sit"
+    }
+  ],
+  "hasNextPage": true
+}

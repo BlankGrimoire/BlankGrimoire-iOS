@@ -1,0 +1,8 @@
+{
+  "status": 200,
+  "url": "https://example.org/search?q=lorem",
+  "headers": {
+    "content-type": "text/html"
+  },
+  "body": "<html><body><p>Lorem ipsum</p></body></html>"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "theme.example",
+  "name": "Example Theme",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "detectionSignature": {
+    "metaGenerator": "^ExampleCMS",
+    "selectors": [".example-reader", ".example-chapter-list"],
+    "scriptSrc": ["/assets/example-theme\\.js"],
+    "probePaths": ["/example-feed.json"],
+    "minScore": 5
+  },
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

@@ -1,0 +1,7 @@
+{
+  "index": 0,
+  "imageURL": "https://example.org/images/lorem-ipsum/12-5/001.jpg",
+  "headers": {
+    "Referer": "https://example.org/"
+  }
+}

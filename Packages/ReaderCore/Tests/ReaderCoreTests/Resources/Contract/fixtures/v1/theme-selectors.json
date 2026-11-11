@@ -1,0 +1,44 @@
+{
+  "search": {
+    "path": "/search",
+    "item": ".result",
+    "title": ".result-title",
+    "link": "a",
+    "cover": "img",
+    "nextPage": ".next"
+  },
+  "details": {
+    "title": "h1.series-title",
+    "cover": ".series-cover img",
+    "synopsis": ".series-synopsis",
+    "authors": ".series-authors",
+    "artists": ".series-artists",
+    "altTitles": ".series-alt-titles",
+    "tags": ".series-tags",
+    "status": ".series-status",
+    "contentRating": ".series-rating"
+  },
+  "chapters": {
+    "item": ".chapter",
+    "link": "a",
+    "title": ".chapter-title",
+    "date": ".chapter-date",
+    "order": "desc"
+  },
+  "pages": {
+    "strategies": [
+      {
+        "kind": "css",
+        "image": ".reader img",
+        "srcAttributes": ["data-src", "src"],
+        "headers": {
+          "Referer": "https://example.org/"
+        }
+      }
+    ]
+  },
+  "attribution": {
+    "logo": ".site-logo img",
+    "credits": ".site-credits"
+  }
+}

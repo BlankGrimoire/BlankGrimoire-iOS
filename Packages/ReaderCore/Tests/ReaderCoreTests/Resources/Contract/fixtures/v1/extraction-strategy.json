@@ -1,0 +1,8 @@
+{
+  "kind": "css",
+  "image": ".reader img",
+  "srcAttributes": ["data-src", "src"],
+  "headers": {
+    "Referer": "https://example.org/"
+  }
+}

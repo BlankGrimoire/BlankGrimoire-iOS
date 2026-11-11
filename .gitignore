@@ -13,5 +13,7 @@
 .swiftpm/
 DerivedData/
 build/
+release/
+node_modules/
 xcuserdata/
 *.xcuserstate

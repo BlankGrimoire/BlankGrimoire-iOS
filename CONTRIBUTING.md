@@ -21,8 +21,10 @@ Requirements: macOS, Xcode 16+, Swift 6, [XcodeGen](https://github.com/yonaskolb
 
 ```bash
 brew install xcodegen
-make gen    # generate BlankGrimoire.xcodeproj
-make test   # run package tests with `swift test`
+make gen              # generate BlankGrimoire.xcodeproj
+make lint             # swift-format check
+make test-readercore  # ReaderCore package tests
+make test             # app tests on a simulator
 ```
 
 The `.xcodeproj` is **generated and never committed**. To add files or
@@ -32,12 +34,19 @@ targets, edit `project.yml` or `Packages/ReaderCore/Package.swift`.
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. In short:
 
+- ReaderCore is **one Swift module**. Its folders (`Domain`, `PluginEngine`,
+  `Persistence`, `ImagePipeline`, `Features`, `DesignSystem`) are conventions,
+  not enforced compiler boundaries: keep dependencies pointing towards
+  `Domain` and do not reach across layers for convenience.
 - `Domain` depends only on Foundation.
-- `Features` depends only on `Domain` and `DesignSystem`: views never import
-  `PluginEngine`, `Persistence`, `Networking` or `ImagePipeline`.
-- Only the `App` target wires concrete implementations (composition root).
+- `Features` talks to protocols and value types. It must not drive
+  `JSPluginRuntime`, `PluginDocumentStore` or `PluginRequestHandler` directly;
+  those are wired by the composition root and reached through services.
+- Only the `BlankGrimoire` app target wires concrete implementations
+  (`AppComposition`).
 - `PluginEngine/Runtime/Resources/runtime.js` and the contract fixtures are
-  **vendored from the SDK**: never edit them by hand, use `make sync-sdk`.
+  **vendored from the SDK**: never edit them by hand, use `make sync-sdk` or
+  `make sync-sdk-release`.
 
 Significant architectural changes require an ADR in `docs/ADR/`.
 
@@ -48,12 +57,10 @@ Significant architectural changes require an ADR in `docs/ADR/`.
 - Prefer `struct` and `actor` over classes; types crossing isolation
   boundaries must be `Sendable`.
 - No force unwraps outside tests, except for documented invariants.
-- Every source file starts with the MPL-2.0 header:
+- Every source file starts with the SPDX header:
 
 ```swift
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// SPDX-License-Identifier: MPL-2.0
 ```
 
 ## Tests

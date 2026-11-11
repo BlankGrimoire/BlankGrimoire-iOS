@@ -1,0 +1,244 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "adapter.session.bundleIntegrityFailed" : {
+      "comment" : "Integrity check failure when opening an installed adapter.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The installed adapter failed its integrity check: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'adapter installato non ha superato il controllo di integrità: %@"
+          }
+        }
+      }
+    },
+    "adapter.session.invalidBundleEncoding" : {
+      "comment" : "The installed adapter bundle is not valid UTF-8.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The installed adapter is not valid UTF-8"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'adapter installato non è UTF-8 valido"
+          }
+        }
+      }
+    },
+    "adapter.session.unsupportedAPIVersion" : {
+      "comment" : "The adapter was built for a newer contract version.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsupported adapter API version %lld; expected %lld"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versione API dell'adapter non supportata: %lld; attesa %lld"
+          }
+        }
+      }
+    },
+    "site.error.adapterNotInstalled" : {
+      "comment" : "No adapter with this identifier is installed.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No installed adapter named %@. Install it from Settings → Adapters."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nessun adapter installato con nome %@. Installalo da Impostazioni → Adapter."
+          }
+        }
+      }
+    },
+    "site.error.catalogUnavailable" : {
+      "comment" : "Cross-site browsing is not configured.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Site browsing is unavailable"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La navigazione dei siti non è disponibile"
+          }
+        }
+      }
+    },
+    "site.error.challengeRequired" : {
+      "comment" : "The site asks the user to complete a verification page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The site requires a verification before continuing: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il sito richiede una verifica prima di continuare: %@"
+          }
+        }
+      }
+    },
+    "site.error.chapterFetchFailed" : {
+      "comment" : "The chapter request returned a non-success HTTP status.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chapter page returned HTTP %lld"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pagina del capitolo ha restituito HTTP %lld"
+          }
+        }
+      }
+    },
+    "site.error.duplicatePageIndex" : {
+      "comment" : "The adapter returned two pages with the same index.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The adapter returned duplicate page index %lld"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'adapter ha restituito l'indice di pagina duplicato %lld"
+          }
+        }
+      }
+    },
+    "site.error.invalidPageURL" : {
+      "comment" : "The adapter returned a page URL the app refuses to load.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The adapter returned an invalid page URL: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'adapter ha restituito un URL di pagina non valido: %@"
+          }
+        }
+      }
+    },
+    "site.error.invalidSearchURL" : {
+      "comment" : "The search path could not be turned into a URL.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to build a search URL for %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile costruire un URL di ricerca per %@"
+          }
+        }
+      }
+    },
+    "site.error.invalidSiteURL" : {
+      "comment" : "The configured site URL is not a valid HTTPS URL.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid site URL: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL del sito non valido: %@"
+          }
+        }
+      }
+    },
+    "site.error.noPages" : {
+      "comment" : "The adapter returned an empty page list.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The adapter returned no pages for this chapter"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L'adapter non ha restituito pagine per questo capitolo"
+          }
+        }
+      }
+    },
+    "site.error.searchFailed" : {
+      "comment" : "A site search failed with a diagnostic message.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search failed: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ricerca non riuscita: %@"
+          }
+        }
+      }
+    },
+    "site.error.siteProfileNotFound" : {
+      "comment" : "The requested site profile no longer exists.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Site profile not found: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profilo del sito non trovato: %@"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
