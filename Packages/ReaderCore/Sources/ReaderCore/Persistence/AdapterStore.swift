@@ -2,7 +2,20 @@
 
 import CryptoKit
 import Foundation
+import JavaScriptCore
 import SwiftData
+
+/// Adapter fields that live in the JavaScript bundle itself.
+///
+/// Repository-owned fields (`sha256`) are attached after decoding.
+private struct AdapterBundleInspection: Decodable {
+    let id: String
+    let name: String?
+    let version: String
+    let apiVersion: Int
+    let detectionSignature: ThemeSignature
+    let selectors: ThemeSelectors
+}
 
 // MARK: - Adapter Store Errors
 
@@ -629,7 +642,8 @@ public final class DefaultAdapterStore: AdapterStore {
                 publicKey: publicKey
             )
 
-            let manifest = try parseManifest(from: bundleData)
+            let inspected = try inspectBundle(bundleData, sha256: entry.sha256)
+            let manifest = inspected.manifest
 
             guard manifest.id == entry.id else {
                 throw AdapterStoreError.bundleVerificationFailed(
@@ -647,8 +661,7 @@ public final class DefaultAdapterStore: AdapterStore {
                 throw AdapterStoreError.bundleVerificationFailed("Manifest SHA-256 mismatch")
             }
 
-            let selectors = try extractSelectors(from: bundleData)
-            return (manifest, selectors)
+            return (manifest, inspected.selectors)
         }.value
     }
 
@@ -684,65 +697,76 @@ public final class DefaultAdapterStore: AdapterStore {
         return resolved.absoluteString
     }
 
-    private nonisolated static func parseManifest(from bundleData: Data) throws -> AdapterManifest {
-        // The bundle is a JavaScript file. We need to extract the manifest from it.
-        // The manifest is exposed as `BlankGrimoireRuntime.default` or similar.
-        // For simplicity, we'll parse it as JSON if it starts with {, otherwise
-        // we'd need a JS parser. Since the bundle is the adapter script itself,
-        // the manifest is embedded in the JS.
-
-        // Try to find the manifest object in the bundle
-        let bundleString = String(decoding: bundleData, as: UTF8.self)
-
-        // Look for the adapter export pattern
-        // var BlankGrimoireRuntime = { default: { id: "...", ... } }
-        let pattern = #"BlankGrimoireRuntime\s*=\s*\{[^}]*default\s*:\s*(\{[^}]+\})"#
-        let regex = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
-        let range = NSRange(location: 0, length: bundleString.utf16.count)
-
-        if let match = regex.firstMatch(in: bundleString, options: [], range: range),
-            let manifestRange = Range(match.range(at: 1), in: bundleString)
-        {
-            let manifestJSON = String(bundleString[manifestRange])
-            let manifestData = Data(manifestJSON.utf8)
-            return try JSONDecoder().decode(AdapterManifest.self, from: manifestData)
+    /// Evaluates a verified adapter bundle and decodes its public fields.
+    ///
+    /// The bundle is an esbuild IIFE, so field extraction cannot rely on a
+    /// regular expression. The signature and hash have already been verified
+    /// before this runs; the temporary context is discarded immediately.
+    ///
+    /// Not private so the bundle shape is covered by a unit test.
+    nonisolated static func inspectBundle(
+        _ bundleData: Data,
+        sha256: String
+    ) throws -> (manifest: AdapterManifest, selectors: ThemeSelectors) {
+        let script = String(decoding: bundleData, as: UTF8.self)
+        guard let context = JSContext() else {
+            throw AdapterStoreError.bundleVerificationFailed(
+                "Could not create a JavaScript context for the adapter bundle")
         }
 
-        // Fallback: try to parse as if the whole bundle is JSON (for testing)
-        if bundleString.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
-            return try JSONDecoder().decode(AdapterManifest.self, from: bundleData)
+        context.exception = nil
+        _ = context.evaluateScript(script, withSourceURL: URL(fileURLWithPath: "adapter.js"))
+        if let exception = context.exception {
+            throw AdapterStoreError.bundleVerificationFailed(
+                "Adapter bundle failed to evaluate: \(exception.toString() ?? "unknown error")")
         }
 
-        throw AdapterStoreError.bundleVerificationFailed("Could not extract manifest from bundle")
-    }
-
-    private nonisolated static func extractSelectors(from bundleData: Data) throws -> ThemeSelectors {
-        let bundleString = String(decoding: bundleData, as: UTF8.self)
-
-        // Look for the selectors object in the bundle
-        // Pattern: "selectors": { ... }
-        let pattern = #""selectors"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})"#
-        let regex = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
-        let range = NSRange(location: 0, length: bundleString.utf16.count)
-
-        if let match = regex.firstMatch(in: bundleString, options: [], range: range),
-            let selectorsRange = Range(match.range(at: 1), in: bundleString)
-        {
-            let selectorsJSON = String(bundleString[selectorsRange])
-            let selectorsData = Data(selectorsJSON.utf8)
-            return try JSONDecoder().decode(ThemeSelectors.self, from: selectorsData)
+        guard
+            let exports = context.objectForKeyedSubscript("BlankGrimoireRuntime"),
+            exports.isObject
+        else {
+            throw AdapterStoreError.bundleVerificationFailed(
+                "The adapter bundle does not expose a BlankGrimoireRuntime global")
         }
 
-        // Fallback: return minimal selectors for testing
-        return ThemeSelectors(
-            search: .init(path: "", item: "", title: "", link: ""),
-            details: .init(
-                title: "", cover: nil, synopsis: nil, authors: nil, artists: nil, altTitles: nil, tags: nil,
-                status: nil, contentRating: nil),
-            chapters: .init(item: "", link: "", title: nil, date: nil, order: "desc"),
-            pages: .init(strategies: []),
-            attribution: nil
+        let adapter: JSValue
+        if let value = exports.objectForKeyedSubscript("default"), value.isObject {
+            adapter = value
+        } else if let value = exports.objectForKeyedSubscript("adapter"), value.isObject {
+            adapter = value
+        } else if let id = exports.objectForKeyedSubscript("id"), id.isString {
+            adapter = exports
+        } else {
+            throw AdapterStoreError.bundleVerificationFailed("Missing default adapter export")
+        }
+
+        guard
+            let stringify = context.objectForKeyedSubscript("JSON")?
+                .objectForKeyedSubscript("stringify"),
+            let json = stringify.call(withArguments: [adapter])?.toString(),
+            let jsonData = json.data(using: .utf8)
+        else {
+            throw AdapterStoreError.bundleVerificationFailed(
+                "Could not serialise the adapter bundle")
+        }
+
+        let inspection: AdapterBundleInspection
+        do {
+            inspection = try JSONDecoder().decode(AdapterBundleInspection.self, from: jsonData)
+        } catch {
+            throw AdapterStoreError.bundleVerificationFailed(
+                "Invalid adapter bundle: \(error.localizedDescription)")
+        }
+
+        let manifest = AdapterManifest(
+            id: inspection.id,
+            name: inspection.name ?? inspection.id,
+            version: inspection.version,
+            apiVersion: inspection.apiVersion,
+            detectionSignature: inspection.detectionSignature,
+            sha256: sha256
         )
+        return (manifest, inspection.selectors)
     }
 }
 
