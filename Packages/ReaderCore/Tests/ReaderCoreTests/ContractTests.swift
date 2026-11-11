@@ -268,23 +268,26 @@ final class ContractTests: XCTestCase {
 
     // MARK: - Negative Tests
 
-    func testRejectUnknownStatus() throws {
+    func testUnknownStatusFallsBackToUnknown() throws {
         var details = try fixtureObject("manga-details.json")
         details["status"] = "something-new"
 
         let data = try JSONSerialization.data(withJSONObject: details)
 
-        // Decoding should fail because "something-new" is not a known status
-        XCTAssertThrowsError(try JSONDecoder().decode(MangaDetails.self, from: data))
+        // A newer adapter must not break the response: unknown values map to
+        // `.unknown` instead of failing the whole decode.
+        let decoded = try JSONDecoder().decode(MangaDetails.self, from: data)
+        XCTAssertEqual(decoded.status, .unknown)
     }
 
-    func testRejectUnknownContentRating() throws {
+    func testUnknownContentRatingFallsBackToUnknown() throws {
         var details = try fixtureObject("manga-details.json")
         details["contentRating"] = "explicit"
 
         let data = try JSONSerialization.data(withJSONObject: details)
 
-        XCTAssertThrowsError(try JSONDecoder().decode(MangaDetails.self, from: data))
+        let decoded = try JSONDecoder().decode(MangaDetails.self, from: data)
+        XCTAssertEqual(decoded.contentRating, .unknown)
     }
 
     func testRejectLegacyManifestSignature() throws {

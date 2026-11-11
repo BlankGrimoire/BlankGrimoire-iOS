@@ -146,6 +146,8 @@ public actor JSPluginRuntime {
         installRequestBridgeIfNeeded()
 
         let documentID = try documentStore.parse(page.html)
+        let existingDocuments = documentStore.documentIDs()
+        defer { documentStore.releaseDocuments(except: existingDocuments) }
         defer { documentStore.release(documentID) }
 
         let document = try makeDocument(documentID)
@@ -219,6 +221,7 @@ public actor JSPluginRuntime {
         documentStore.clear()
         bridge.dispose()
         context.setObject(nil, forKeyedSubscript: "__native" as NSString)
+        context.setObject(nil, forKeyedSubscript: "__nativeParseHTML" as NSString)
         context.setObject(nil, forKeyedSubscript: "__makeDocument" as NSString)
         context.setObject(nil, forKeyedSubscript: "__resolveRequest" as NSString)
     }
@@ -244,7 +247,16 @@ public actor JSPluginRuntime {
         installTimerBridge(in: context, bridge: bridge)
 
         let parseHTML: @convention(block) (String) -> String? = { html in
-            try? documentStore.parse(html)
+            do {
+                return try documentStore.parse(html)
+            } catch {
+                logger.error(
+                    "Adapter HTML parse failed: \(error.localizedDescription)",
+                    level: 2,
+                    context: nil
+                )
+                return nil
+            }
         }
         context.setObject(parseHTML, forKeyedSubscript: "__nativeParseHTML" as NSString)
 
@@ -691,6 +703,16 @@ public enum PluginRuntimeResources {
     }
 
     public static func runtimeScript() throws -> String {
-        try String(contentsOf: runtimeScriptURL(), encoding: .utf8)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cachedScript {
+            return cachedScript
+        }
+        let script = try String(contentsOf: runtimeScriptURL(), encoding: .utf8)
+        cachedScript = script
+        return script
     }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cachedScript: String?
 }

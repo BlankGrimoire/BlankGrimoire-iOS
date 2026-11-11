@@ -42,43 +42,60 @@ public final class LocalThemeSource: ThemeSource {
 }
 
 /// A theme source that fetches adapters from a remote repository index.
-public final class RemoteThemeSource: ThemeSource {
+///
+/// The index is cached in memory and revalidated with its ETag. Adapters listed
+/// here are summaries; the full bundle is downloaded and verified by
+/// `AdapterStore` before installation.
+public actor RemoteThemeSource: ThemeSource {
+    private struct CachedIndex {
+        let index: RepositoryIndex
+        let etag: String?
+        let fetchedAt: Date
+    }
+
     private let repositoryURL: String
     private let requestHandler: PluginRequestHandler
+    private let cacheLifetime: TimeInterval
+    private var cachedIndex: CachedIndex?
 
-    public init(repositoryURL: String, requestHandler: PluginRequestHandler) {
+    public init(
+        repositoryURL: String,
+        requestHandler: PluginRequestHandler,
+        cacheLifetime: TimeInterval = 5 * 60
+    ) {
         self.repositoryURL = repositoryURL
         self.requestHandler = requestHandler
+        self.cacheLifetime = max(0, cacheLifetime)
+    }
+
+    /// Drops the cached index, for example after an adapter install changes the
+    /// local version of a theme.
+    public func invalidateCache() {
+        cachedIndex = nil
     }
 
     public func listThemes() async throws -> [ThemeAdapter] {
         let index = try await fetchIndex()
-        return index.extensions.map { entry in
-            // Create a minimal ThemeAdapter from the index entry
-            // The full adapter will be downloaded on demand
-            ThemeAdapter(
-                id: entry.id,
-                name: entry.name,
-                version: entry.version,
-                detectionSignature: ThemeSignature(minScore: 1),
-                selectors: ThemeSelectors(
-                    search: .init(path: "", item: "", title: "", link: ""),
-                    details: .init(
-                        title: "", cover: nil, synopsis: nil, authors: nil, artists: nil, altTitles: nil, tags: nil,
-                        status: nil, contentRating: nil),
-                    chapters: .init(item: "", link: "", title: nil, date: nil, order: "desc"),
-                    pages: .init(strategies: []),
-                    attribution: nil
-                )
-            )
-        }
+        return index.extensions.map(makeSummaryAdapter)
     }
 
     public func getTheme(id: String) async throws -> ThemeAdapter? {
         let index = try await fetchIndex()
-        guard let entry = index.extensions.first(where: { $0.id == id }) else { return nil }
+        guard let entry = index.extensions.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return makeSummaryAdapter(entry)
+    }
 
-        return ThemeAdapter(
+    public func hasTheme(id: String) async throws -> Bool {
+        let index = try await fetchIndex()
+        return index.extensions.contains { $0.id == id }
+    }
+
+    private func makeSummaryAdapter(_ entry: ExtensionEntry) -> ThemeAdapter {
+        // The index only carries identity and version. Detection and selectors
+        // become available after the bundle is downloaded and verified.
+        ThemeAdapter(
             id: entry.id,
             name: entry.name,
             version: entry.version,
@@ -95,25 +112,62 @@ public final class RemoteThemeSource: ThemeSource {
         )
     }
 
-    public func hasTheme(id: String) async throws -> Bool {
-        let index = try await fetchIndex()
-        return index.extensions.contains { $0.id == id }
-    }
-
     private func fetchIndex() async throws -> RepositoryIndex {
-        let request = HttpRequest(url: repositoryURL, method: "GET")
-        let response = try await requestHandler.perform(request)
-
-        guard response.status >= 200 && response.status < 300 else {
-            throw AdapterStoreError.networkError("HTTP \(response.status)")
+        if let cachedIndex, Date().timeIntervalSince(cachedIndex.fetchedAt) < cacheLifetime {
+            return cachedIndex.index
         }
 
-        let data = Data(response.body.utf8)
-        return try JSONDecoder().decode(RepositoryIndex.self, from: data)
+        var headers: [String: String] = [:]
+        if let etag = cachedIndex?.etag {
+            headers["If-None-Match"] = etag
+        }
+
+        let request = HttpRequest(
+            url: repositoryURL,
+            method: "GET",
+            headers: headers.isEmpty ? nil : headers
+        )
+        let response = try await requestHandler.perform(request)
+
+        if response.status == 304, let cachedIndex {
+            self.cachedIndex = CachedIndex(
+                index: cachedIndex.index,
+                etag: cachedIndex.etag,
+                fetchedAt: Date()
+            )
+            return cachedIndex.index
+        }
+
+        guard response.status >= 200 && response.status < 300 else {
+            throw ThemeSourceError.repositoryUnavailable(repositoryURL)
+        }
+
+        let index: RepositoryIndex
+        do {
+            index = try JSONDecoder().decode(
+                RepositoryIndex.self,
+                from: Data(response.body.utf8)
+            )
+        } catch {
+            throw ThemeSourceError.invalidIndex(error.localizedDescription)
+        }
+
+        cachedIndex = CachedIndex(
+            index: index,
+            etag: response.headers.first {
+                $0.key.caseInsensitiveCompare("ETag") == .orderedSame
+            }?.value,
+            fetchedAt: Date()
+        )
+        return index
     }
 }
 
 /// A composite theme source that checks multiple sources in order.
+///
+/// A failing source never hides the successful ones. Duplicate ids keep the
+/// highest semantic version, so an installed adapter does not mask a newer
+/// remote release.
 public final class CompositeThemeSource: ThemeSource {
     private let sources: [ThemeSource]
 
@@ -122,32 +176,44 @@ public final class CompositeThemeSource: ThemeSource {
     }
 
     public func listThemes() async throws -> [ThemeAdapter] {
-        var allThemes: [ThemeAdapter] = []
+        var bestByID: [String: ThemeAdapter] = [:]
+        var firstError: Error?
+        var anySourceSucceeded = false
+
         for source in sources {
-            let themes = try await source.listThemes()
-            allThemes.append(contentsOf: themes)
+            do {
+                let themes = try await source.listThemes()
+                anySourceSucceeded = true
+                for theme in themes {
+                    if let existing = bestByID[theme.id] {
+                        if AdapterVersion(theme.version) > AdapterVersion(existing.version) {
+                            bestByID[theme.id] = theme
+                        }
+                    } else {
+                        bestByID[theme.id] = theme
+                    }
+                }
+            } catch {
+                if firstError == nil {
+                    firstError = error
+                }
+            }
         }
-        // Deduplicate by ID, keeping first occurrence
-        var seen = Set<String>()
-        return allThemes.filter { seen.insert($0.id).inserted }
+
+        if !anySourceSucceeded, let firstError {
+            throw firstError
+        }
+
+        return bestByID.values.sorted { $0.id < $1.id }
     }
 
     public func getTheme(id: String) async throws -> ThemeAdapter? {
-        for source in sources {
-            if let theme = try await source.getTheme(id: id) {
-                return theme
-            }
-        }
-        return nil
+        let themes = try await listThemes()
+        return themes.first { $0.id == id }
     }
 
     public func hasTheme(id: String) async throws -> Bool {
-        for source in sources {
-            if try await source.hasTheme(id: id) {
-                return true
-            }
-        }
-        return false
+        try await getTheme(id: id) != nil
     }
 }
 

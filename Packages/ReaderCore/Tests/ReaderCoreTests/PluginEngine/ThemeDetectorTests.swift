@@ -239,3 +239,119 @@ final class ThemeDetectorTests: XCTestCase {
         )
     }
 }
+
+extension ThemeDetectorTests {
+    func testTieBreakPrefersLexicographicallySmallerID() async throws {
+        let beta = ThemeAdapter(
+            id: "theme.beta",
+            name: "Beta",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(selectors: [".same"], minScore: 10),
+            selectors: makeTestSelectors()
+        )
+        let alpha = ThemeAdapter(
+            id: "theme.alpha",
+            name: "Alpha",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(selectors: [".same"], minScore: 10),
+            selectors: makeTestSelectors()
+        )
+
+        // Install in reverse lexicographic order: the store order must not win.
+        try await installTheme(beta)
+        try await installTheme(alpha)
+
+        let html = #"<html><body><div class="same">Synthetic</div></body></html>"#
+        let result = try await detector.detectTheme(from: html, baseURL: "https://example.org")
+
+        XCTAssertEqual(result.theme.id, "theme.alpha")
+    }
+
+    func testTieBreakPrefersHigherMinScore() async throws {
+        let low = ThemeAdapter(
+            id: "theme.alpha",
+            name: "Low minimum",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(selectors: [".a", ".b"], minScore: 10),
+            selectors: makeTestSelectors()
+        )
+        let high = ThemeAdapter(
+            id: "theme.beta",
+            name: "High minimum",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(selectors: [".a", ".b"], minScore: 20),
+            selectors: makeTestSelectors()
+        )
+
+        try await installTheme(low)
+        try await installTheme(high)
+
+        let html = #"<html><body><div class="a">A</div><div class="b">B</div></body></html>"#
+        let result = try await detector.detectTheme(from: html, baseURL: "https://example.org")
+
+        XCTAssertEqual(result.theme.id, "theme.beta")
+    }
+
+    func testTieBreakPrefersAdapterWithMoreSelectors() async throws {
+        let selectors = ThemeAdapter(
+            id: "theme.selectors",
+            name: "Two selectors",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(selectors: [".a", ".b"], minScore: 10),
+            selectors: makeTestSelectors()
+        )
+        let generator = ThemeAdapter(
+            id: "theme.generator",
+            name: "Meta generator",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(metaGenerator: "Synthetic", minScore: 10),
+            selectors: makeTestSelectors()
+        )
+
+        try await installTheme(selectors)
+        try await installTheme(generator)
+
+        let html = """
+            <html><head><meta name="generator" content="Synthetic CMS"></head>
+            <body><div class="a">A</div><div class="b">B</div></body></html>
+            """
+        let result = try await detector.detectTheme(from: html, baseURL: "https://example.org")
+
+        XCTAssertEqual(result.theme.id, "theme.selectors")
+    }
+
+    func testDetectThemeRejectsInvalidURL() async throws {
+        do {
+            _ = try await detector.detectTheme(for: "://not-a-url")
+            XCTFail("Expected invalidURL")
+        } catch let error as ThemeDetectorError {
+            XCTAssertEqual(error, .invalidURL("://not-a-url"))
+        }
+    }
+
+    func testInvalidRegexDoesNotAbortScoring() async throws {
+        let theme = ThemeAdapter(
+            id: "theme.invalid-regex",
+            name: "Invalid regex",
+            version: "1.0.0",
+            detectionSignature: ThemeSignature(
+                metaGenerator: "[",
+                selectors: [".present"],
+                minScore: 10
+            ),
+            selectors: makeTestSelectors()
+        )
+        try await installTheme(theme)
+
+        let html = #"""
+            <html>
+            <head><meta name="generator" content="Synthetic"></head>
+            <body><div class="present">Text</div></body>
+            </html>
+            """#
+        let result = try await detector.detectTheme(from: html, baseURL: "https://example.org")
+
+        XCTAssertEqual(result.theme.id, "theme.invalid-regex")
+        XCTAssertEqual(result.score, 15)
+    }
+}

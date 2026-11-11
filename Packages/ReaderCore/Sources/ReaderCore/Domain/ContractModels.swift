@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import Foundation
-import SwiftData
 
 // MARK: - Validation Helpers
 
@@ -47,6 +46,18 @@ public enum MangaStatus: String, Codable, Sendable {
     case hiatus
     case cancelled
     case unknown
+
+    /// Decodes unknown values as `.unknown` instead of failing the whole
+    /// response: a newer adapter may emit a status this build does not know.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = MangaStatus(rawValue: raw) ?? .unknown
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// Content rating
@@ -59,6 +70,18 @@ public enum ContentRating: String, Codable, Sendable {
     case suggestive
     case mature
     case unknown
+
+    /// Same tolerant decoding as `MangaStatus`: unknown ratings map to
+    /// `.unknown` rather than failing the response.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ContentRating(rawValue: raw) ?? .unknown
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// Site attribution

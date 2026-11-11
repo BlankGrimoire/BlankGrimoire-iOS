@@ -34,7 +34,7 @@ public final class MangaDetailViewModel {
         defer { isLoadingChapters = false }
 
         do {
-            chapters = try await chapterRepository.fetchByMangaId(manga.id)
+            chapters = Self.sortedChapters(try await chapterRepository.fetchByMangaId(manga.id))
         } catch {
             lastError = error
         }
@@ -56,7 +56,7 @@ public final class MangaDetailViewModel {
         }
 
         do {
-            chapters = try await chapterRepository.fetchByMangaId(manga.id)
+            chapters = Self.sortedChapters(try await chapterRepository.fetchByMangaId(manga.id))
         } catch {
             lastError = error
         }
@@ -87,10 +87,11 @@ public final class MangaDetailViewModel {
 
     public func readChapter(_ chapter: ChapterEntity) async {
         let target = chapter.manga ?? manga
+        let totalPages = max(chapter.pageCount, 1)
         target.updateLastRead(
             chapterId: chapter.id,
             pageIndex: 0,
-            totalPages: chapter.pageCount
+            totalPages: totalPages
         )
 
         do {
@@ -100,19 +101,22 @@ public final class MangaDetailViewModel {
         }
     }
 
+    /// Marks every chapter as read by moving the series position to the end of
+    /// the last chapter in reading order.
     public func markAllAsRead() async {
-        guard
-            let lastChapter = chapters.max(by: {
-                ($0.number ?? 0) < ($1.number ?? 0)
-            })
-        else {
+        if chapters.isEmpty {
+            await loadChapters()
+        }
+
+        guard let lastChapter = Self.sortedChapters(chapters).last else {
             return
         }
 
+        let totalPages = max(lastChapter.pageCount, 1)
         manga.updateLastRead(
             chapterId: lastChapter.id,
-            pageIndex: lastChapter.pageCount,
-            totalPages: lastChapter.pageCount
+            pageIndex: totalPages - 1,
+            totalPages: totalPages
         )
 
         do {
@@ -132,6 +136,18 @@ public final class MangaDetailViewModel {
         } catch {
             lastError = error
             return false
+        }
+    }
+
+    /// Sorts chapters by numeric order, with unnumbered chapters last.
+    private static func sortedChapters(_ chapters: [ChapterEntity]) -> [ChapterEntity] {
+        chapters.sorted { lhs, rhs in
+            let left = lhs.number ?? .greatestFiniteMagnitude
+            let right = rhs.number ?? .greatestFiniteMagnitude
+            if left != right {
+                return left < right
+            }
+            return lhs.id < rhs.id
         }
     }
 }

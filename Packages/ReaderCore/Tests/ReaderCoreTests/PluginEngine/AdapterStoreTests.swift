@@ -111,8 +111,27 @@ final class AdapterStoreTests: XCTestCase {
     }
 
     func testVersionComparisonRejectsDowngradeOrdering() {
-        XCTAssertEqual(DefaultAdapterStore.compareVersions("1.0.10", "1.0.9"), .orderedDescending)
-        XCTAssertEqual(DefaultAdapterStore.compareVersions("1.0.0", "1.0.0"), .orderedSame)
-        XCTAssertEqual(DefaultAdapterStore.compareVersions("1.0.0", "2.0.0"), .orderedAscending)
+        XCTAssertTrue(AdapterVersion("1.0.10") > AdapterVersion("1.0.9"))
+        XCTAssertEqual(AdapterVersion("1.0.0"), AdapterVersion("1.0.0"))
+        XCTAssertTrue(AdapterVersion("1.0.0") < AdapterVersion("2.0.0"))
+        // A stable release outranks its prereleases.
+        XCTAssertTrue(AdapterVersion("2.0.0") > AdapterVersion("2.0.0-beta.1"))
+        XCTAssertTrue(AdapterVersion("2.0.0-beta.1") < AdapterVersion("2.0.0-beta.2"))
+    }
+
+    func testKeyFingerprintIsStableAndIgnoresPrefix() {
+        let key = "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        let fingerprint = AdapterKeyFingerprint.short(of: key)
+
+        XCTAssertEqual(fingerprint.count, 19)
+        let sameKeyWithoutPrefix =
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        XCTAssertEqual(fingerprint, AdapterKeyFingerprint.short(of: sameKeyWithoutPrefix))
+        XCTAssertNotEqual(
+            fingerprint,
+            AdapterKeyFingerprint.short(
+                of: "ed25519:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+            )
+        )
     }
 }

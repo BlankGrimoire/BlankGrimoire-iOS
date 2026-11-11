@@ -18,20 +18,31 @@
         public private(set) var results: [SiteSearchResult] = []
         public private(set) var failures: [SiteSearchFailure] = []
         public private(set) var isSearching = false
+        public private(set) var isLoadingMore = false
         public private(set) var hasSearched = false
+        /// Whether the last site page announced another result page.
+        public private(set) var hasMoreResults = false
         public private(set) var importingIDs: Set<String> = []
         public private(set) var importedIDs: Set<String> = []
         public var lastError: Error?
 
         private let siteProfileRepository: any SiteProfileRepository
         private let catalogService: (any SiteCatalogProviding)?
+        private let mangaRepository: (any MangaRepository)?
+        /// Incremented on every search so stale results from a superseded
+        /// request cannot overwrite the latest one.
+        private var searchGeneration = 0
+        /// Cursors for the next page, keyed by site profile id.
+        private var nextPageURLs: [String: String] = [:]
 
         public init(
             siteProfileRepository: any SiteProfileRepository,
-            catalogService: (any SiteCatalogProviding)?
+            catalogService: (any SiteCatalogProviding)?,
+            mangaRepository: (any MangaRepository)? = nil
         ) {
             self.siteProfileRepository = siteProfileRepository
             self.catalogService = catalogService
+            self.mangaRepository = mangaRepository
         }
 
         /// True when the composition root supplied a catalog service.
@@ -83,6 +94,8 @@
                 results = []
                 failures = []
                 hasSearched = false
+                hasMoreResults = false
+                nextPageURLs = [:]
                 return
             }
 
@@ -93,17 +106,85 @@
                 results = []
                 failures = []
                 hasSearched = true
+                hasMoreResults = false
+                nextPageURLs = [:]
                 return
             }
 
+            searchGeneration += 1
+            let generation = searchGeneration
             isSearching = true
             lastError = nil
-            defer { isSearching = false }
+            defer {
+                if generation == searchGeneration {
+                    isSearching = false
+                }
+            }
 
             let outcome = await catalogService.search(query: trimmed, in: targets)
+            guard generation == searchGeneration, !Task.isCancelled else { return }
             results = outcome.results
             failures = outcome.failures
+            nextPageURLs = outcome.nextPageURLs
+            hasMoreResults = outcome.hasMore
             hasSearched = true
+            await refreshImportedIDs()
+        }
+
+        /// Loads the next result page and appends it to the current list.
+        ///
+        /// Each site exposes its own "next" link, so the catalog returns the
+        /// new cursor alongside the new results.
+        public func loadMore() async {
+            guard let catalogService, !isSearching, !isLoadingMore, hasMoreResults,
+                !nextPageURLs.isEmpty
+            else {
+                return
+            }
+
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+
+            let outcome = SiteSearchOutcome(
+                results: results,
+                failures: failures,
+                nextPageURLs: nextPageURLs
+            )
+            let generation = searchGeneration
+            isLoadingMore = true
+            lastError = nil
+            defer {
+                if generation == searchGeneration {
+                    isLoadingMore = false
+                }
+            }
+
+            let next = await catalogService.searchNextPage(
+                query: trimmed,
+                in: targetSites,
+                continuingFrom: outcome
+            )
+            guard generation == searchGeneration, !Task.isCancelled else { return }
+
+            var seen = Set(results.map(\.id))
+            results.append(contentsOf: next.results.filter { seen.insert($0.id).inserted })
+            var failedSites = Set(failures.map(\.siteProfileID))
+            failures.append(contentsOf: next.failures.filter { failedSites.insert($0.siteProfileID).inserted })
+            nextPageURLs = next.nextPageURLs
+            hasMoreResults = next.hasMore
+            await refreshImportedIDs()
+        }
+
+        /// Rebuilds the "already in library" state from persisted data so it
+        /// survives a new view model or an app relaunch.
+        private func refreshImportedIDs() async {
+            guard let mangaRepository, !results.isEmpty else { return }
+            do {
+                let imported = try await mangaRepository.fetchByIds(results.map(\.id))
+                importedIDs = Set(imported.map(\.id))
+            } catch {
+                lastError = error
+            }
         }
 
         public func importResult(_ result: SiteSearchResult) async {
@@ -126,10 +207,15 @@
         }
 
         public func reset() {
+            searchGeneration += 1
             query = ""
             results = []
             failures = []
+            nextPageURLs = [:]
+            hasMoreResults = false
             hasSearched = false
+            isSearching = false
+            isLoadingMore = false
         }
     }
 
@@ -151,7 +237,8 @@
             self._viewModel = State(
                 initialValue: SiteSearchViewModel(
                     siteProfileRepository: dependencies.siteProfileRepository,
-                    catalogService: dependencies.catalogService
+                    catalogService: dependencies.catalogService,
+                    mangaRepository: dependencies.mangaRepository
                 )
             )
         }
@@ -164,11 +251,17 @@
                         systemImage: "magnifyingglass",
                         description: Text("Site browsing is not configured for this build.")
                     )
-                } else if viewModel.searchableSites.isEmpty {
+                } else if viewModel.sites.isEmpty {
                     ContentUnavailableView {
                         Label("No Sites Yet", systemImage: "globe")
                     } description: {
                         Text("Add a site and install its adapter before searching.")
+                    }
+                } else if viewModel.searchableSites.isEmpty {
+                    ContentUnavailableView {
+                        Label("All Sites Are Disabled", systemImage: "pause.circle")
+                    } description: {
+                        Text("Enable at least one site in Settings to search it.")
                     }
                 } else {
                     resultsList
@@ -218,9 +311,11 @@
                 ChallengeView(
                     url: route.url,
                     allowedHosts: route.allowedHosts,
-                    onComplete: {
+                    onFinish: { outcome in
                         challengeRoute = nil
-                        viewModel.lastError = nil
+                        if outcome == .completed {
+                            viewModel.lastError = nil
+                        }
                     }
                 )
             }
@@ -270,12 +365,39 @@
                         ForEach(viewModel.results) { result in
                             resultRow(result)
                         }
+
+                        if viewModel.hasMoreResults {
+                            Button {
+                                Task { await viewModel.loadMore() }
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    if viewModel.isLoadingMore {
+                                        ProgressView()
+                                    } else {
+                                        Text("Load More")
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .disabled(viewModel.isLoadingMore)
+                        }
                     }
                 }
 
                 if viewModel.hasSearched && viewModel.results.isEmpty && !viewModel.isSearching {
                     Section {
-                        ContentUnavailableView.search(text: viewModel.query)
+                        if viewModel.failures.isEmpty {
+                            ContentUnavailableView.search(text: viewModel.query)
+                        } else {
+                            ContentUnavailableView {
+                                Label("No Results", systemImage: "exclamationmark.magnifyingglass")
+                            } description: {
+                                Text(
+                                    "No site returned results. Check the issues below and try again."
+                                )
+                            }
+                        }
                     }
                     .listRowBackground(Color.clear)
                 }

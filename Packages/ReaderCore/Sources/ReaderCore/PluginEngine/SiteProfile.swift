@@ -77,11 +77,19 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         )
     }
 
+    /// Whether `baseURL` parses as an absolute URL with a host.
+    public var hasValidBaseURL: Bool {
+        guard let url = URL(string: baseURL), let host = url.host, !host.isEmpty else {
+            return false
+        }
+        return url.scheme?.lowercased() == "https"
+    }
+
     /// Creates a network policy for this site.
     public func makeNetworkPolicy() -> SiteNetworkPolicy {
         SiteNetworkPolicy(
             baseURL: baseURL,
-            allowedHosts: [URL(string: baseURL)?.host ?? ""],
+            allowedHosts: [URL(string: baseURL)?.host].compactMap { $0?.lowercased() },
             maxRedirects: maxRedirects,
             cookieHandling: cookieHandling,
             timeout: timeout,
@@ -91,20 +99,11 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
 
     /// Returns a copy with updated last accessed time.
     public func touched() -> SiteProfile {
-        SiteProfile(
-            id: id,
-            name: name,
-            baseURL: baseURL,
-            themeID: themeID,
-            themeVersion: themeVersion,
-            selectorOverrides: selectorOverrides,
-            isEnabled: isEnabled,
-            lastAccessedAt: Date(),
-            customHeaders: customHeaders,
-            cookieHandling: cookieHandling,
-            maxRedirects: maxRedirects,
-            timeout: timeout
-        )
+        // `var copy = self` keeps this in sync when a field is added; building
+        // a new profile by hand silently dropped fields in the past.
+        var copy = self
+        copy.lastAccessedAt = Date()
+        return copy
     }
 }
 

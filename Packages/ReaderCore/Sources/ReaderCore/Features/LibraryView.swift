@@ -101,7 +101,7 @@
                 LazyVGrid(columns: gridColumns, spacing: DesignTokens.Spacing.md) {
                     ForEach(viewModel.filteredManga) { manga in
                         NavigationLink {
-                            MangaDetailView(manga: manga, dependencies: dependencies)
+                            MangaDetailLoaderView(mangaID: manga.id, dependencies: dependencies)
                         } label: {
                             MangaCard(manga: manga, imageLoader: dependencies.imageLoader)
                         }
@@ -121,7 +121,7 @@
 
     /// Individual manga card in the library grid
     private struct MangaCard: View {
-        let manga: MangaEntity
+        let manga: LibraryEntry
         let imageLoader: (any ImageLoading)?
 
         var body: some View {

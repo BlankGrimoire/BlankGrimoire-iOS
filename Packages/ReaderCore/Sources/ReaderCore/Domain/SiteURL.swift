@@ -13,23 +13,29 @@ public enum SiteURL {
         guard !trimmed.isEmpty else { return nil }
 
         let candidate: String
-        if trimmed.contains("://") {
+        if let separator = trimmed.range(of: "://") {
+            let scheme = trimmed[..<separator.lowerBound].lowercased()
+            guard scheme == "http" || scheme == "https" else { return nil }
             candidate = trimmed
         } else {
             candidate = "https://\(trimmed)"
         }
 
         guard
-            let url = URL(string: candidate),
-            let scheme = url.scheme?.lowercased(),
+            var components = URLComponents(string: candidate),
+            let scheme = components.scheme?.lowercased(),
             scheme == "https",
-            let host = url.host,
+            let host = components.host?.lowercased(),
             !host.isEmpty
         else {
             return nil
         }
 
-        return url
+        // Normalise the host so `Example.ORG` and `example.org` produce the
+        // same base URL and allowlist entry.
+        components.scheme = "https"
+        components.host = host
+        return components.url
     }
 
     /// Returns the site root, preserving a meaningful path prefix.

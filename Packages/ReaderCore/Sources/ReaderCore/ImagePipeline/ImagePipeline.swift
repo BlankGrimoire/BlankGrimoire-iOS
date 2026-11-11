@@ -3,6 +3,10 @@
 import CryptoKit
 import Foundation
 
+#if canImport(UIKit)
+    import UIKit
+#endif
+
 /// Configuration for the image pipeline.
 public struct ImagePipelineConfiguration: Sendable {
     /// Maximum number of concurrent downloads.
@@ -91,19 +95,24 @@ public actor ImagePipeline {
     private let semaphore: AsyncSemaphore
     private var inFlight: [String: InFlightRequest] = [:]
     private let logger: ImagePipelineLogger
+    /// Kept alive for the lifetime of the pipeline; clears the volatile tier
+    /// when the system reports memory pressure.
+    private let memoryWarningObserver: MemoryWarningObserver?
 
     private init(
         configuration: ImagePipelineConfiguration,
         cache: any ImageCache,
         session: URLSession,
         semaphore: AsyncSemaphore,
-        logger: ImagePipelineLogger
+        logger: ImagePipelineLogger,
+        memoryWarningObserver: MemoryWarningObserver?
     ) {
         self.configuration = configuration
         self.cache = cache
         self.session = session
         self.semaphore = semaphore
         self.logger = logger
+        self.memoryWarningObserver = memoryWarningObserver
     }
 
     /// Creates a new ImagePipeline asynchronously.
@@ -117,18 +126,30 @@ public actor ImagePipeline {
 
         // Create cache
         let cache: any ImageCache
+        let memoryCache: MemoryImageCache?
         if let providedCache = providedCache {
             cache = providedCache
+            memoryCache = nil
         } else if configuration.enableDiskCache {
-            let memoryCache = MemoryImageCache(maxSize: configuration.memoryCacheSize)
+            let volatile = MemoryImageCache(maxSize: configuration.memoryCacheSize)
             let diskCache = try await DiskImageCache.create(
                 directory: configuration.diskCacheDirectory,
                 maxSize: configuration.diskCacheSize
             )
-            let tieredCache = TieredImageCache(memoryCache: memoryCache, diskCache: diskCache)
-            cache = tieredCache
+            cache = TieredImageCache(memoryCache: volatile, diskCache: diskCache)
+            memoryCache = volatile
         } else {
-            cache = MemoryImageCache(maxSize: configuration.memoryCacheSize)
+            let volatile = MemoryImageCache(maxSize: configuration.memoryCacheSize)
+            cache = volatile
+            memoryCache = volatile
+        }
+
+        // A provided cache owns its own lifecycle; only the caches created here
+        // are cleared in response to memory warnings.
+        let memoryWarningObserver = memoryCache.map { cache in
+            MemoryWarningObserver {
+                Task { await cache.clear() }
+            }
         }
 
         // Configure URLSession
@@ -153,7 +174,8 @@ public actor ImagePipeline {
             cache: cache,
             session: session,
             semaphore: semaphore,
-            logger: logger
+            logger: logger,
+            memoryWarningObserver: memoryWarningObserver
         )
     }
 
@@ -192,21 +214,44 @@ public actor ImagePipeline {
             )
         }
 
-        // Check if request is already in flight
-        if let existing = inFlight[cacheKey] {
+        // Join or create the shared download for this cache key.
+        let token = UUID()
+        let task: Task<ImageResult, Error>
+        if var existing = inFlight[cacheKey] {
             logger.log("Deduplicating request: \(url.absoluteString)", level: .debug)
-            return try await existing.task.value
+            existing.waiters.insert(token)
+            if let progress {
+                existing.progressObservers[token] = progress
+            }
+            inFlight[cacheKey] = existing
+            task = existing.task
+        } else {
+            let newTask = Task {
+                try await self.downloadAndCache(url, headers: headers, cacheKey: cacheKey)
+            }
+            var request = InFlightRequest(task: newTask)
+            request.waiters.insert(token)
+            if let progress {
+                request.progressObservers[token] = progress
+            }
+            inFlight[cacheKey] = request
+            task = newTask
         }
 
-        // Create new request
-        let task = Task {
-            try await downloadAndCache(url, headers: headers, cacheKey: cacheKey, progress: progress)
+        do {
+            // Cancelling the caller must stop a download nobody is waiting for
+            // any more; the last waiter cancels the shared task.
+            let result = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                Task { await self.removeWaiter(cacheKey: cacheKey, token: token) }
+            }
+            removeWaiter(cacheKey: cacheKey, token: token)
+            return result
+        } catch {
+            removeWaiter(cacheKey: cacheKey, token: token)
+            throw error
         }
-
-        inFlight[cacheKey] = InFlightRequest(task: task)
-        defer { inFlight.removeValue(forKey: cacheKey) }
-
-        return try await task.value
     }
 
     /// Fetches an image with a completion callback (for backward compatibility).
@@ -317,11 +362,12 @@ public actor ImagePipeline {
     private func downloadAndCache(
         _ url: URL,
         headers: [String: String]?,
-        cacheKey: String,
-        progress: ImageProgressCallback?
+        cacheKey: String
     ) async throws -> ImageResult {
+        try Task.checkCancellation()
         await semaphore.wait()
         defer { semaphore.signal() }
+        try Task.checkCancellation()
 
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -349,7 +395,26 @@ public actor ImagePipeline {
             throw ImagePipelineError.responseTooLarge(configuration.maxImageBytes)
         }
 
-        let data = try await Self.collect(bytes, limit: configuration.maxImageBytes)
+        let expectedLength =
+            httpResponse.expectedContentLength > 0
+            ? httpResponse.expectedContentLength
+            : nil
+        var data = Data()
+        data.reserveCapacity(min(configuration.maxImageBytes, 64 * 1024))
+        var sinceLastReport = 0
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            if data.count >= configuration.maxImageBytes {
+                throw ImagePipelineError.responseTooLarge(configuration.maxImageBytes)
+            }
+            data.append(byte)
+            sinceLastReport += 1
+            if sinceLastReport >= 64 * 1024 {
+                sinceLastReport = 0
+                reportProgress(cacheKey: cacheKey, received: Int64(data.count), total: expectedLength)
+            }
+        }
+        reportProgress(cacheKey: cacheKey, received: Int64(data.count), total: expectedLength)
         try Self.validateImageData(data, mimeType: httpResponse.mimeType)
 
         // Cache the result
@@ -495,23 +560,12 @@ public actor ImagePipeline {
         return false
     }
 
-    private static func collect(_ bytes: URLSession.AsyncBytes, limit: Int) async throws -> Data {
-        var data = Data()
-        data.reserveCapacity(min(limit, 64 * 1024))
-        for try await byte in bytes {
-            if data.count >= limit {
-                throw ImagePipelineError.responseTooLarge(limit)
-            }
-            data.append(byte)
-        }
-        return data
-    }
-
     /// Cache keys include a stable hash of the custom headers.
     ///
     /// The URL alone would allow a credentialed request to serve its bytes to
-    /// an unauthenticated one (and vice versa).
-    private func cacheKey(for url: URL, headers: [String: String]?) -> String {
+    /// an unauthenticated one (and vice versa). Only the digest is persisted,
+    /// so header values never reach the cache index.
+    func cacheKey(for url: URL, headers: [String: String]?) -> String {
         guard let headers, !headers.isEmpty else {
             return url.absoluteString
         }
@@ -531,7 +585,32 @@ public actor ImagePipeline {
 
     private struct InFlightRequest {
         let task: Task<ImageResult, Error>
-        var subscribers: [ImageCompletionCallback] = []
+        var waiters: Set<UUID> = []
+        var progressObservers: [UUID: ImageProgressCallback] = [:]
+    }
+
+    /// Removes one caller from the shared request and cancels the download when
+    /// nobody is waiting for it any more.
+    private func removeWaiter(cacheKey: String, token: UUID) {
+        guard var request = inFlight[cacheKey] else { return }
+        request.waiters.remove(token)
+        request.progressObservers.removeValue(forKey: token)
+        if request.waiters.isEmpty {
+            request.task.cancel()
+            inFlight.removeValue(forKey: cacheKey)
+        } else {
+            inFlight[cacheKey] = request
+        }
+    }
+
+    /// Forwards download progress to every caller sharing the request.
+    private func reportProgress(cacheKey: String, received: Int64, total: Int64?) {
+        guard let observers = inFlight[cacheKey]?.progressObservers, !observers.isEmpty else {
+            return
+        }
+        for callback in observers.values {
+            callback(received, total)
+        }
     }
 
     // MARK: - Private methods
@@ -735,3 +814,28 @@ public struct CacheStatistics: Sendable, Equatable {
 }
 
 // MARK: - Async Semaphore
+
+/// Clears a volatile cache when iOS reports memory pressure.
+///
+/// The observer is inert on macOS, where ReaderCore tests run.
+final class MemoryWarningObserver: @unchecked Sendable {
+    private var token: NSObjectProtocol?
+
+    init(onWarning: @escaping @Sendable () -> Void) {
+        #if canImport(UIKit)
+            token = NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: nil
+            ) { _ in
+                onWarning()
+            }
+        #endif
+    }
+
+    deinit {
+        if let token {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+}

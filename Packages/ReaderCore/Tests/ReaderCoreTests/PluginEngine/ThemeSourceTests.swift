@@ -141,7 +141,81 @@ final class ThemeSourceTests: XCTestCase {
         XCTAssertEqual(themes.first?.id, "theme.dup")
     }
 
+    func testCompositeThemeSourceToleratesFailingSource() async throws {
+        let failing = StubThemeSource(fails: true)
+        let working = StubThemeSource(themes: [makeTheme(id: "theme.working", version: "1.0.0")])
+
+        let composite = CompositeThemeSource(sources: [failing, working])
+        let themes = try await composite.listThemes()
+
+        XCTAssertEqual(themes.map(\.id), ["theme.working"])
+    }
+
+    func testCompositeThemeSourceThrowsWhenEverySourceFails() async throws {
+        let composite = CompositeThemeSource(sources: [StubThemeSource(fails: true)])
+
+        do {
+            _ = try await composite.listThemes()
+            XCTFail("Expected the composite source to rethrow the first error")
+        } catch {
+            XCTAssertEqual(error as? StubThemeSource.Failure, .unavailable)
+        }
+    }
+
+    func testCompositeThemeSourceKeepsHighestVersionPerID() async throws {
+        let local = StubThemeSource(themes: [makeTheme(id: "theme.shared", version: "1.2.0")])
+        let remote = StubThemeSource(themes: [makeTheme(id: "theme.shared", version: "1.10.0")])
+
+        let composite = CompositeThemeSource(sources: [local, remote])
+        let themes = try await composite.listThemes()
+
+        XCTAssertEqual(themes.count, 1)
+        XCTAssertEqual(themes.first?.version, "1.10.0")
+    }
+
+    func testCompositeThemeSourcePrefersStableOverPrerelease() async throws {
+        let prerelease = StubThemeSource(themes: [makeTheme(id: "theme.shared", version: "2.0.0-beta.1")])
+        let stable = StubThemeSource(themes: [makeTheme(id: "theme.shared", version: "2.0.0")])
+
+        let composite = CompositeThemeSource(sources: [prerelease, stable])
+        let themes = try await composite.listThemes()
+
+        XCTAssertEqual(themes.first?.version, "2.0.0")
+    }
+
     // MARK: - Helpers
+
+    private struct StubThemeSource: ThemeSource {
+        enum Failure: Error, Equatable {
+            case unavailable
+        }
+
+        var themes: [ThemeAdapter] = []
+        var fails = false
+
+        func listThemes() async throws -> [ThemeAdapter] {
+            if fails { throw Failure.unavailable }
+            return themes
+        }
+
+        func getTheme(id: String) async throws -> ThemeAdapter? {
+            try await listThemes().first { $0.id == id }
+        }
+
+        func hasTheme(id: String) async throws -> Bool {
+            try await getTheme(id: id) != nil
+        }
+    }
+
+    private func makeTheme(id: String, version: String) -> ThemeAdapter {
+        ThemeAdapter(
+            id: id,
+            name: id,
+            version: version,
+            detectionSignature: ThemeSignature(minScore: 1),
+            selectors: makeTestSelectors()
+        )
+    }
 
     private func installTheme(_ theme: ThemeAdapter) async throws {
         let manifest = AdapterManifest(

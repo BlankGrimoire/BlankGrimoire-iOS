@@ -272,7 +272,11 @@
 
     @MainActor
     final class PreviewChapterPagesProvider: ChapterPagesProviding {
-        func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity] {
+        func pages(
+            for chapter: ChapterEntity,
+            manga: MangaEntity,
+            forceRefresh: Bool
+        ) async throws -> [PageEntity] {
             (0..<3).map { index in
                 PageEntity(index: index, imageURL: "https://example.org/pages/lorem-\(index + 1).jpg")
             }

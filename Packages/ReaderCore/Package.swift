@@ -27,7 +27,8 @@ let package = Package(
             ],
             path: "Sources/ReaderCore",
             resources: [
-                .copy("PluginEngine/Runtime/Resources/runtime.js")
+                .copy("PluginEngine/Runtime/Resources/runtime.js"),
+                .process("Resources/Localizable.xcstrings"),
             ]
         ),
         .testTarget(

@@ -183,6 +183,9 @@
                             .keyboardType(.URL)
                             .noAutoCapitalization()
                             .autocorrectionDisabled()
+                            .onChange(of: url) {
+                                viewModel.clearDetection()
+                            }
 
                         TextField("Display Name (optional)", text: $name)
                     } header: {

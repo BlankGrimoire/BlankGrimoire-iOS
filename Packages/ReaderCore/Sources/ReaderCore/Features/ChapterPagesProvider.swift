@@ -12,13 +12,17 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
     private let logger: any PluginLogger
     private let bridgeFactory: AdapterBridgeFactory
     private let runtimeFactory: AdapterRuntimeFactory
+    private let sessionPool: AdapterSessionPool
+    /// How long a fetched page list stays valid before it is regenerated.
+    private let pageTTL: TimeInterval
 
     public convenience init(
         pageRepository: any PageRepository,
         chapterRepository: any ChapterRepository,
         siteProfileRepository: any SiteProfileRepository,
         adapterStore: any AdapterStore,
-        logger: any PluginLogger = ConsolePluginLogger()
+        logger: any PluginLogger = ConsolePluginLogger(),
+        pageTTL: TimeInterval = 6 * 60 * 60
     ) {
         self.init(
             pageRepository: pageRepository,
@@ -27,7 +31,8 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
             adapterStore: adapterStore,
             logger: logger,
             bridgeFactory: AdapterRuntimeDefaults.makeBridge,
-            runtimeFactory: AdapterRuntimeDefaults.makeRuntime
+            runtimeFactory: AdapterRuntimeDefaults.makeRuntime,
+            pageTTL: pageTTL
         )
     }
 
@@ -38,7 +43,9 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         adapterStore: any AdapterStore,
         logger: any PluginLogger,
         bridgeFactory: @escaping AdapterBridgeFactory,
-        runtimeFactory: @escaping AdapterRuntimeFactory
+        runtimeFactory: @escaping AdapterRuntimeFactory,
+        sessionPool: AdapterSessionPool = AdapterSessionPool(),
+        pageTTL: TimeInterval = 6 * 60 * 60
     ) {
         self.pageRepository = pageRepository
         self.chapterRepository = chapterRepository
@@ -47,67 +54,77 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         self.logger = logger
         self.bridgeFactory = bridgeFactory
         self.runtimeFactory = runtimeFactory
+        self.sessionPool = sessionPool
+        self.pageTTL = pageTTL
     }
 
-    public func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity] {
+    public func pages(
+        for chapter: ChapterEntity,
+        manga: MangaEntity,
+        forceRefresh: Bool
+    ) async throws -> [PageEntity] {
         let cached = try await pageRepository.fetchByChapterId(chapter.id)
-        if !cached.isEmpty {
-            return cached.sorted { $0.index < $1.index }
+        if !cached.isEmpty, !forceRefresh {
+            // Downloaded chapters must stay readable offline. Fetched pages
+            // expire because adapter image URLs can be time-limited.
+            if chapter.isDownloaded || isCacheFresh(for: chapter) {
+                return cached.sorted { $0.index < $1.index }
+            }
         }
 
         let profile = try await resolveProfile(for: manga)
-        let session = try await AdapterSession.open(
+        let lease = try await sessionPool.acquire(
             profile: profile,
             adapterStore: adapterStore,
             bridgeFactory: bridgeFactory,
             runtimeFactory: runtimeFactory
         )
+        defer { lease.release() }
+        let session = lease.session
 
-        do {
-            let chapterKey = chapter.adapterKey
-            guard let chapterURL = AdapterSession.absoluteURL(chapterKey, baseURL: profile.baseURL) else {
-                throw SiteBrowsingError.invalidSiteURL(chapterKey)
-            }
-            let response = try await session.bridge.request(HttpRequest(url: chapterURL.absoluteString))
-            if response.status == 403 || response.status == 503 {
-                throw SiteBrowsingError.challengeRequired(chapterURL)
-            }
-            guard (200...299).contains(response.status) else {
-                throw SiteBrowsingError.chapterFetchFailed(response.status)
-            }
-
-            let context = PluginPageContext(
-                html: response.body,
-                baseURL: profile.baseURL,
-                siteName: profile.name,
-                overrides: profile.selectorOverrides
-            )
-            let extracted = try await session.runtime.pages(
-                mangaKey: manga.adapterKey,
-                chapterKey: chapterKey,
-                in: context
-            )
-            guard !extracted.isEmpty else {
-                throw SiteBrowsingError.noPages
-            }
-
-            let pages = try validatedPages(extracted, chapter: chapter, profile: profile)
-            for page in pages {
-                page.chapter = chapter
-            }
-
-            try await pageRepository.replaceAll(for: chapter.id, with: pages)
-
-            chapter.pageCount = pages.count
-            chapter.updatedAt = Date()
-            try await chapterRepository.save(chapter)
-
-            await session.dispose()
-            return pages
-        } catch {
-            await session.dispose()
-            throw error
+        let chapterKey = chapter.adapterKey
+        guard let chapterURL = AdapterSession.absoluteURL(chapterKey, baseURL: profile.baseURL) else {
+            throw SiteBrowsingError.invalidSiteURL(chapterKey)
         }
+        let response = try await session.bridge.request(HttpRequest(url: chapterURL.absoluteString))
+        if response.status == 403 || response.status == 503 {
+            throw SiteBrowsingError.challengeRequired(chapterURL)
+        }
+        guard (200...299).contains(response.status) else {
+            throw SiteBrowsingError.chapterFetchFailed(response.status)
+        }
+
+        let context = PluginPageContext(
+            html: response.body,
+            baseURL: profile.baseURL,
+            siteName: profile.name,
+            overrides: profile.selectorOverrides
+        )
+        let extracted = try await session.runtime.pages(
+            mangaKey: manga.adapterKey,
+            chapterKey: chapterKey,
+            in: context
+        )
+        guard !extracted.isEmpty else {
+            throw SiteBrowsingError.noPages
+        }
+
+        let pages = try validatedPages(extracted, chapter: chapter, profile: profile)
+        for page in pages {
+            page.chapter = chapter
+        }
+
+        try await pageRepository.replaceAll(for: chapter.id, with: pages)
+
+        chapter.pageCount = pages.count
+        chapter.updatedAt = Date()
+        try await chapterRepository.save(chapter)
+
+        return pages
+    }
+
+    private func isCacheFresh(for chapter: ChapterEntity) -> Bool {
+        Date().timeIntervalSince(chapter.updatedAt) < pageTTL
     }
 
     /// Validates adapter output before it reaches persistence or the network.

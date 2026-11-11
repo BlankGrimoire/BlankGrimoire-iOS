@@ -45,11 +45,26 @@ public enum AdapterSessionError: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .bundleIntegrityFailed(let detail):
-            return "The installed adapter failed its integrity check: \(detail)"
+            return String(
+                localized: "adapter.session.bundleIntegrityFailed",
+                defaultValue: "The installed adapter failed its integrity check: \(detail)",
+                bundle: .module,
+                comment: "Integrity check failure when opening an installed adapter."
+            )
         case .invalidBundleEncoding:
-            return "The installed adapter is not valid UTF-8"
+            return String(
+                localized: "adapter.session.invalidBundleEncoding",
+                defaultValue: "The installed adapter is not valid UTF-8",
+                bundle: .module,
+                comment: "The installed adapter bundle is not valid UTF-8."
+            )
         case .unsupportedAPIVersion(let found):
-            return "Unsupported adapter API version \(found); expected \(ContractVersion.current)"
+            return String(
+                localized: "adapter.session.unsupportedAPIVersion",
+                defaultValue: "Unsupported adapter API version \(found); expected \(ContractVersion.current)",
+                bundle: .module,
+                comment: "The adapter was built for a newer contract version."
+            )
         }
     }
 }
@@ -99,8 +114,36 @@ struct AdapterSession {
         bridgeFactory: AdapterBridgeFactory = AdapterRuntimeDefaults.makeBridge,
         runtimeFactory: AdapterRuntimeFactory = AdapterRuntimeDefaults.makeRuntime
     ) async throws -> AdapterSession {
+        // Without a valid HTTPS base URL the network policy would only contain
+        // an empty host; fail with a message the user can act on.
+        guard profile.hasValidBaseURL else {
+            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
+        }
+
         guard let bundle = try await adapterStore.getInstalledAdapter(id: profile.themeID) else {
             throw SiteBrowsingError.adapterNotInstalled(profile.themeID)
+        }
+
+        return try open(
+            profile: profile,
+            bundle: bundle,
+            bridgeFactory: bridgeFactory,
+            runtimeFactory: runtimeFactory
+        )
+    }
+
+    /// Opens a session for a bundle already read from the store.
+    ///
+    /// The session pool reads the bundle once to build its cache key, so the
+    /// store is not queried twice per adapter open.
+    static func open(
+        profile: SiteProfile,
+        bundle: AdapterBundle,
+        bridgeFactory: AdapterBridgeFactory = AdapterRuntimeDefaults.makeBridge,
+        runtimeFactory: AdapterRuntimeFactory = AdapterRuntimeDefaults.makeRuntime
+    ) throws -> AdapterSession {
+        guard profile.hasValidBaseURL else {
+            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
         }
 
         // Decoding validates this too, but an in-memory bundle could be built

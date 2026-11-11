@@ -56,6 +56,189 @@ final class SiteCatalogServiceTests: XCTestCase {
         XCTAssertEqual(filtered.results.map(\.siteProfileID), ["site-a"])
     }
 
+    func testSearchUsesTheQueryParameterFromTheSearchPath() async {
+        let recorder = RequestRecorder()
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let service = SiteCatalogService(
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            mangaRepository: TestMangaRepository(),
+            chapterRepository: TestChapterRepository(),
+            adapterStore: TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search?s=")]),
+            logger: SilentLogger(),
+            bridgeFactory: { profile in
+                PluginBridge(
+                    policy: profile.makeNetworkPolicy(),
+                    logger: SilentLogger(),
+                    customRequestHandler: { request in
+                        recorder.record(request.url)
+                        return HttpResponse(
+                            status: 200,
+                            url: request.url,
+                            headers: [:],
+                            body: "<html></html>"
+                        )
+                    }
+                )
+            },
+            runtimeFactory: { _, _ in TestSiteRuntime() }
+        )
+
+        _ = await service.search(query: "lorem", in: [profile])
+
+        XCTAssertEqual(recorder.urls.last, "https://example.org/search?s=lorem")
+    }
+
+    func testSearchRemovesDuplicateAdapterKeys() async {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let service = SiteCatalogService(
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            mangaRepository: TestMangaRepository(),
+            chapterRepository: TestChapterRepository(),
+            adapterStore: TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search")]),
+            logger: SilentLogger(),
+            bridgeFactory: makeBridgeFactory(),
+            runtimeFactory: { _, _ in DuplicateSearchRuntime() }
+        )
+
+        let outcome = await service.search(query: "lorem", in: [profile])
+
+        XCTAssertEqual(outcome.results.count, 1)
+        XCTAssertEqual(outcome.results.first?.key, "https://example.org/series")
+    }
+
+    func testSearchEncodesPlusAndUsesTheSearchPageAsBaseURL() async {
+        let recorder = RequestRecorder()
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let service = SiteCatalogService(
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            mangaRepository: TestMangaRepository(),
+            chapterRepository: TestChapterRepository(),
+            adapterStore: TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search")]),
+            logger: SilentLogger(),
+            bridgeFactory: { profile in
+                PluginBridge(
+                    policy: profile.makeNetworkPolicy(),
+                    logger: SilentLogger(),
+                    customRequestHandler: { request in
+                        recorder.record(request.url)
+                        return HttpResponse(
+                            status: 200,
+                            url: request.url,
+                            headers: [:],
+                            body: "<html></html>"
+                        )
+                    }
+                )
+            },
+            runtimeFactory: { _, _ in ContextRecordingRuntime(recorder: recorder) }
+        )
+
+        _ = await service.search(query: "C++", in: [profile])
+
+        XCTAssertEqual(recorder.urls.last, "https://example.org/search?q=C%2B%2B")
+        XCTAssertEqual(recorder.baseURLs.last, "https://example.org/search?q=C%2B%2B")
+    }
+
+    func testSearchExposesAndLoadsTheNextPage() async {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let service = SiteCatalogService(
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            mangaRepository: TestMangaRepository(),
+            chapterRepository: TestChapterRepository(),
+            adapterStore: TestAdapterStore(bundles: [
+                makeBundle(themeID: "theme.a", searchPath: "/search", nextPageSelector: ".next")
+            ]),
+            logger: SilentLogger(),
+            bridgeFactory: { profile in
+                PluginBridge(
+                    policy: profile.makeNetworkPolicy(),
+                    logger: SilentLogger(),
+                    customRequestHandler: { request in
+                        let html =
+                            request.url.contains("page=2")
+                            ? "<html><body></body></html>"
+                            : "<html><body><a class=\"next\" href=\"/search?page=2\">Next</a></body></html>"
+                        return HttpResponse(status: 200, url: request.url, headers: [:], body: html)
+                    }
+                )
+            },
+            runtimeFactory: { _, _ in PagingRuntime() }
+        )
+
+        let first = await service.search(query: "lorem", in: [profile])
+        XCTAssertEqual(first.results.map(\.title), ["Page 1"])
+        XCTAssertTrue(first.hasMore)
+        XCTAssertEqual(first.nextPageURLs, ["site-a": "https://example.org/search?page=2"])
+
+        let second = await service.searchNextPage(
+            query: "lorem",
+            in: [profile],
+            continuingFrom: first
+        )
+        XCTAssertEqual(second.results.map(\.title), ["Page 2"])
+        XCTAssertFalse(second.hasMore)
+        XCTAssertTrue(second.nextPageURLs.isEmpty)
+    }
+
+    func testSearchIgnoresNextLinksOutsideTheSite() async {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let service = SiteCatalogService(
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            mangaRepository: TestMangaRepository(),
+            chapterRepository: TestChapterRepository(),
+            adapterStore: TestAdapterStore(bundles: [
+                makeBundle(themeID: "theme.a", searchPath: "/search", nextPageSelector: ".next")
+            ]),
+            logger: SilentLogger(),
+            bridgeFactory: { profile in
+                PluginBridge(
+                    policy: profile.makeNetworkPolicy(),
+                    logger: SilentLogger(),
+                    customRequestHandler: { request in
+                        let html = """
+                            <html><body>
+                            <a class="next" href="https://evil.example.net/search?page=2">Next</a>
+                            </body></html>
+                            """
+                        return HttpResponse(status: 200, url: request.url, headers: [:], body: html)
+                    }
+                )
+            },
+            runtimeFactory: { _, _ in PagingRuntime() }
+        )
+
+        let outcome = await service.search(query: "lorem", in: [profile])
+
+        XCTAssertFalse(outcome.hasMore)
+        XCTAssertTrue(outcome.nextPageURLs.isEmpty)
+    }
+
+    func testImportRejectsAttributionOutsideTheSite() async throws {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let service = SiteCatalogService(
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            mangaRepository: TestMangaRepository(),
+            chapterRepository: TestChapterRepository(),
+            adapterStore: TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search")]),
+            logger: SilentLogger(),
+            bridgeFactory: makeBridgeFactory(),
+            runtimeFactory: { _, _ in ForeignAttributionRuntime() }
+        )
+        let result = SiteSearchResult(
+            siteProfileID: profile.id,
+            siteName: profile.name,
+            siteURL: profile.baseURL,
+            key: "https://example.org/series/lorem",
+            title: "Lorem"
+        )
+
+        let imported = try await service.importManga(result)
+
+        XCTAssertEqual(imported.siteURL, profile.baseURL)
+        XCTAssertNil(imported.siteLogoURL)
+        XCTAssertEqual(imported.siteName, "Untrusted Name")
+    }
+
     func testImportPersistsDetailsAndChaptersWithoutResettingLocalState() async throws {
         let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
         let mangaRepository = TestMangaRepository()
@@ -160,6 +343,92 @@ final class DefaultChapterPagesProviderTests: XCTestCase {
         XCTAssertEqual(pages.map(\.id), [cached.id])
     }
 
+    func testPagesForceRefreshReplacesCachedPages() async throws {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let manga = MangaEntity(
+            id: "manga",
+            title: "Lorem",
+            siteProfileID: profile.id,
+            siteURL: profile.baseURL
+        )
+        let chapter = ChapterEntity(id: "chapter", pageCount: 1)
+        let cached = PageEntity(index: 0, imageURL: "https://example.org/cached.jpg")
+        cached.chapter = chapter
+        let pageRepository = TestPageRepository(pages: [cached])
+        let provider = DefaultChapterPagesProvider(
+            pageRepository: pageRepository,
+            chapterRepository: TestChapterRepository(chapters: [chapter]),
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            adapterStore: TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search")]),
+            logger: SilentLogger(),
+            bridgeFactory: makeBridgeFactory(),
+            runtimeFactory: { _, _ in TestSiteRuntime() }
+        )
+
+        let pages = try await provider.pages(for: chapter, manga: manga, forceRefresh: true)
+
+        XCTAssertEqual(pages.map(\.index), [0, 1, 2])
+        XCTAssertEqual(pageRepository.pages.map(\.index), [0, 1, 2])
+    }
+
+    func testPagesExpiredCacheIsRegenerated() async throws {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let manga = MangaEntity(
+            id: "manga",
+            title: "Lorem",
+            siteProfileID: profile.id,
+            siteURL: profile.baseURL
+        )
+        let chapter = ChapterEntity(id: "chapter", pageCount: 1)
+        chapter.updatedAt = Date().addingTimeInterval(-7 * 60 * 60)
+        let cached = PageEntity(index: 0, imageURL: "https://example.org/cached.jpg")
+        cached.chapter = chapter
+        let pageRepository = TestPageRepository(pages: [cached])
+        let provider = DefaultChapterPagesProvider(
+            pageRepository: pageRepository,
+            chapterRepository: TestChapterRepository(chapters: [chapter]),
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            adapterStore: TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search")]),
+            logger: SilentLogger(),
+            bridgeFactory: makeBridgeFactory(),
+            runtimeFactory: { _, _ in TestSiteRuntime() }
+        )
+
+        let pages = try await provider.pages(for: chapter, manga: manga)
+
+        XCTAssertEqual(pages.map(\.index), [0, 1, 2])
+        XCTAssertFalse(pageRepository.pages.contains { $0.id == cached.id })
+    }
+
+    func testPagesDownloadedChapterKeepsExpiredCache() async throws {
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        let manga = MangaEntity(
+            id: "manga",
+            title: "Lorem",
+            siteProfileID: profile.id,
+            siteURL: profile.baseURL
+        )
+        let chapter = ChapterEntity(id: "chapter", pageCount: 1)
+        chapter.updatedAt = Date().addingTimeInterval(-7 * 60 * 60)
+        chapter.isDownloaded = true
+        let cached = PageEntity(index: 0, imageURL: "https://example.org/cached.jpg")
+        cached.chapter = chapter
+        let pageRepository = TestPageRepository(pages: [cached])
+        let provider = DefaultChapterPagesProvider(
+            pageRepository: pageRepository,
+            chapterRepository: TestChapterRepository(chapters: [chapter]),
+            siteProfileRepository: TestProfileRepository(profiles: [profile]),
+            adapterStore: TestAdapterStore(bundles: []),
+            logger: SilentLogger(),
+            bridgeFactory: makeBridgeFactory(),
+            runtimeFactory: { _, _ in TestSiteRuntime() }
+        )
+
+        let pages = try await provider.pages(for: chapter, manga: manga)
+
+        XCTAssertEqual(pages.map(\.id), [cached.id])
+    }
+
     func testPagesRejectsMissingProfile() async {
         let manga = MangaEntity(id: "manga", title: "Lorem")
         let chapter = ChapterEntity(id: "chapter")
@@ -187,13 +456,24 @@ final class DefaultChapterPagesProviderTests: XCTestCase {
 // MARK: - Fixtures
 
 @MainActor
-private func makeProfile(id: String, themeID: String, baseURL: String) -> SiteProfile {
+func makeProfile(id: String, themeID: String, baseURL: String) -> SiteProfile {
     SiteProfile(id: id, name: id, baseURL: baseURL, themeID: themeID)
 }
 
-private func makeBundle(themeID: String, searchPath: String) -> AdapterBundle {
+func makeBundle(
+    themeID: String,
+    searchPath: String,
+    version: String = "1.0.0",
+    nextPageSelector: String? = nil
+) -> AdapterBundle {
     let selectors = ThemeSelectors(
-        search: .init(path: searchPath, item: ".item", title: ".title", link: "a"),
+        search: .init(
+            path: searchPath,
+            item: ".item",
+            title: ".title",
+            link: "a",
+            nextPage: nextPageSelector
+        ),
         details: .init(title: ".title"),
         chapters: .init(item: ".chapter", link: "a", order: "desc"),
         pages: .init(strategies: [])
@@ -202,14 +482,14 @@ private func makeBundle(themeID: String, searchPath: String) -> AdapterBundle {
     let theme = ThemeAdapter(
         id: themeID,
         name: themeID,
-        version: "1.0.0",
+        version: version,
         detectionSignature: signature,
         selectors: selectors
     )
     let manifest = AdapterManifest(
         id: themeID,
         name: themeID,
-        version: "1.0.0",
+        version: version,
         apiVersion: ContractVersion.current,
         detectionSignature: signature,
         sha256: "00"
@@ -222,7 +502,7 @@ private func makeBundle(themeID: String, searchPath: String) -> AdapterBundle {
     )
 }
 
-private func makeBridgeFactory() -> AdapterBridgeFactory {
+func makeBridgeFactory() -> AdapterBridgeFactory {
     { profile in
         PluginBridge(
             policy: profile.makeNetworkPolicy(),
@@ -234,7 +514,7 @@ private func makeBridgeFactory() -> AdapterBridgeFactory {
     }
 }
 
-private struct SilentLogger: PluginLogger {
+struct SilentLogger: PluginLogger {
     func log(_ message: String, level: Int, context: [String: Any]?) {}
     func error(_ message: String, level: Int, context: [String: Any]?) {}
     func warn(_ message: String, level: Int, context: [String: Any]?) {}
@@ -293,8 +573,8 @@ private struct TestSiteRuntime: SiteAdapterRuntime {
 // MARK: - Repository Doubles
 
 @MainActor
-private final class TestAdapterStore: AdapterStore {
-    let bundles: [AdapterBundle]
+final class TestAdapterStore: AdapterStore {
+    var bundles: [AdapterBundle]
 
     init(bundles: [AdapterBundle]) {
         self.bundles = bundles
@@ -432,4 +712,124 @@ private final class TestPageRepository: PageRepository {
         pages.removeAll { $0.chapter?.id == chapterId }
     }
     func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
+}
+
+private struct DuplicateSearchRuntime: SiteAdapterRuntime {
+    func search(_ query: SearchQuery, in page: PluginPageContext) async throws -> PagedResult<MangaSummary> {
+        PagedResult(
+            items: [
+                MangaSummary(key: "https://example.org/series", title: "Lorem"),
+                MangaSummary(key: "https://example.org/series", title: "Lorem (duplicate)"),
+            ],
+            hasNextPage: false
+        )
+    }
+
+    func details(for key: String, in page: PluginPageContext) async throws -> MangaDetails {
+        MangaDetails(
+            key: key,
+            title: "Lorem",
+            status: .unknown,
+            contentRating: .unknown
+        )
+    }
+
+    func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
+    func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] { [] }
+    func dispose() async {}
+}
+
+private final class RequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _urls: [String] = []
+    private var _baseURLs: [String] = []
+
+    var urls: [String] {
+        lock.withLock { _urls }
+    }
+
+    var baseURLs: [String] {
+        lock.withLock { _baseURLs }
+    }
+
+    func record(_ url: String) {
+        lock.withLock { _urls.append(url) }
+    }
+
+    func recordBaseURL(_ url: String) {
+        lock.withLock { _baseURLs.append(url) }
+    }
+}
+
+private struct ContextRecordingRuntime: SiteAdapterRuntime {
+    let recorder: RequestRecorder
+
+    func search(_ query: SearchQuery, in page: PluginPageContext) async throws -> PagedResult<MangaSummary> {
+        await recorder.recordBaseURL(page.baseURL)
+        return PagedResult(
+            items: [MangaSummary(key: "https://example.org/series", title: "Lorem")],
+            hasNextPage: false
+        )
+    }
+
+    func details(for key: String, in page: PluginPageContext) async throws -> MangaDetails {
+        MangaDetails(key: key, title: "Lorem", status: .unknown, contentRating: .unknown)
+    }
+
+    func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
+    func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] { [] }
+    func dispose() async {}
+}
+
+private struct ForeignAttributionRuntime: SiteAdapterRuntime {
+    func search(_ query: SearchQuery, in page: PluginPageContext) async throws -> PagedResult<MangaSummary> {
+        PagedResult(items: [], hasNextPage: false)
+    }
+
+    func details(for key: String, in page: PluginPageContext) async throws -> MangaDetails {
+        MangaDetails(
+            key: key,
+            title: "Lorem",
+            status: .ongoing,
+            contentRating: .safe,
+            attribution: Attribution(
+                siteName: "Untrusted Name",
+                siteURL: "https://evil.example.net",
+                logoURL: "http://evil.example.net/logo.png"
+            )
+        )
+    }
+
+    func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
+    func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] { [] }
+    func dispose() async {}
+}
+
+private struct PagingRuntime: SiteAdapterRuntime {
+    func search(
+        _ query: SearchQuery,
+        in page: PluginPageContext
+    ) async throws -> PagedResult<MangaSummary> {
+        PagedResult(
+            items: [
+                MangaSummary(
+                    key: "https://example.org/page-\(query.page)",
+                    title: "Page \(query.page)"
+                )
+            ],
+            hasNextPage: query.page == 1
+        )
+    }
+
+    func details(for key: String, in page: PluginPageContext) async throws -> MangaDetails {
+        MangaDetails(key: key, title: "Lorem", status: .unknown, contentRating: .unknown)
+    }
+
+    func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
+    func pages(
+        mangaKey: String,
+        chapterKey: String,
+        in page: PluginPageContext
+    ) async throws -> [Page] { [] }
+    func dispose() async {}
 }

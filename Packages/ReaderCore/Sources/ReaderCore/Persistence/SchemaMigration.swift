@@ -40,3 +40,34 @@ public enum BlankGrimoireMigrationPlan: SchemaMigrationPlan {
         []
     }
 }
+
+/// Shared container factory for the app and its tests.
+///
+/// Keeping a single schema definition prevents the test store from drifting
+/// from the app store and silently skipping entities.
+public enum BlankGrimoireSchema {
+    public static func makeContainer(
+        isStoredInMemoryOnly: Bool = false,
+        name: String? = nil
+    ) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: BlankGrimoireSchemaV1.self)
+        let configuration: ModelConfiguration
+        if let name {
+            configuration = ModelConfiguration(
+                name,
+                schema: schema,
+                isStoredInMemoryOnly: isStoredInMemoryOnly
+            )
+        } else {
+            configuration = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: isStoredInMemoryOnly
+            )
+        }
+        return try ModelContainer(
+            for: schema,
+            migrationPlan: BlankGrimoireMigrationPlan.self,
+            configurations: [configuration]
+        )
+    }
+}

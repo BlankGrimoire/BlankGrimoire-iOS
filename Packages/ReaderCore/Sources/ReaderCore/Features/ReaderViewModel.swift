@@ -28,6 +28,12 @@ public final class ReaderViewModel {
     private var saveChain: Task<Void, Never>?
     private var lastPersistedPageIndex: Int?
     private var lastPersistedTotalPages: Int?
+    /// Tracks whether the reader moved within the chapter during this session.
+    ///
+    /// Opening a chapter and closing it must not record progress: the first
+    /// page would otherwise be saved as `1/N` without any reading.
+    private var hasNavigatedInSession = false
+    private var activeSaveCount = 0
 
     public init(
         manga: MangaEntity,
@@ -60,6 +66,17 @@ public final class ReaderViewModel {
     }
 
     public func load() async {
+        await loadPages(forceRefresh: false)
+    }
+
+    /// Forces a fresh page list, for example after a challenge or an expired
+    /// adapter URL made the cached images fail.
+    public func reload() async {
+        hasLoaded = false
+        await loadPages(forceRefresh: true)
+    }
+
+    private func loadPages(forceRefresh: Bool) async {
         guard !hasLoaded else { return }
 
         isLoading = true
@@ -69,10 +86,14 @@ public final class ReaderViewModel {
         }
 
         do {
-            var loaded = try await pageRepository.fetchByChapterId(chapter.id).sorted { $0.index < $1.index }
-            if loaded.isEmpty, let chapterPagesProvider {
-                loaded = try await chapterPagesProvider.pages(for: chapter, manga: manga)
-                    .sorted { $0.index < $1.index }
+            var loaded = try await pageRepository.fetchByChapterId(chapter.id)
+                .sorted { $0.index < $1.index }
+            if let chapterPagesProvider, forceRefresh || loaded.isEmpty {
+                loaded = try await chapterPagesProvider.pages(
+                    for: chapter,
+                    manga: manga,
+                    forceRefresh: forceRefresh
+                ).sorted { $0.index < $1.index }
             }
             pages = loaded
             currentPageIndex = try await restoredPageIndex()
@@ -80,12 +101,6 @@ public final class ReaderViewModel {
         } catch {
             lastError = error
         }
-    }
-
-    /// Forces a reload, for example after the user completes a site challenge.
-    public func reload() async {
-        hasLoaded = false
-        await load()
     }
 
     /// URL the visible verification browser must open, when the site asked for
@@ -103,6 +118,7 @@ public final class ReaderViewModel {
         let clampedIndex = min(max(index, 0), totalPages - 1)
         guard clampedIndex != currentPageIndex else { return }
         currentPageIndex = clampedIndex
+        hasNavigatedInSession = true
         scheduleProgressSave()
     }
 
@@ -139,13 +155,19 @@ public final class ReaderViewModel {
     private func persistProgress() async {
         guard totalPages > 0 else { return }
 
+        // Only a real move (or an existing saved position) counts as reading.
+        // Re-saving on open would mark an untouched chapter as started.
+        guard hasNavigatedInSession || currentPageIndex > 0 || lastPersistedPageIndex != nil else {
+            return
+        }
+
         let pageIndex = min(max(currentPageIndex, 0), totalPages - 1)
         if lastPersistedPageIndex == pageIndex, lastPersistedTotalPages == totalPages {
             return
         }
 
-        isSavingProgress = true
-        defer { isSavingProgress = false }
+        beginSaving()
+        defer { endSaving() }
 
         do {
             let progressEntries = try await readingProgressRepository.fetchByMangaIdAndChapterId(
@@ -186,6 +208,17 @@ public final class ReaderViewModel {
 
     public static func progressID(mangaID: String, chapterID: String) -> String {
         "\(mangaID)::\(chapterID)"
+    }
+
+    /// Concurrent saves share one flag: it only clears when the last one ends.
+    private func beginSaving() {
+        activeSaveCount += 1
+        isSavingProgress = true
+    }
+
+    private func endSaving() {
+        activeSaveCount = max(0, activeSaveCount - 1)
+        isSavingProgress = activeSaveCount > 0
     }
 
     private func restoredPageIndex() async throws -> Int {

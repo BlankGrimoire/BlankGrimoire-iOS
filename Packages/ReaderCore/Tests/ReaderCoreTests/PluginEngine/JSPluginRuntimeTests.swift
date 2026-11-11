@@ -80,6 +80,27 @@ final class JSPluginRuntimeTests: XCTestCase {
         }
     }
 
+    func testAdapterIsEvaluatedBeforeRuntime() throws {
+        let runtimeScript = #"""
+            if (typeof BlankGrimoireRuntime === "undefined" || BlankGrimoireRuntime.marker !== "adapter") {
+                throw new Error("adapter was not evaluated before the runtime");
+            }
+            var BlankGrimoireRuntime = {
+                __apiVersion: 1,
+                dispatch: function () { return Promise.resolve("{}"); }
+            };
+            """#
+        let adapter = adapterScript() + "\nBlankGrimoireRuntime.marker = \"adapter\";"
+
+        let runtime = try JSPluginRuntime(
+            runtimeScript: runtimeScript,
+            adapterScript: adapter,
+            bridge: makeBridge()
+        )
+
+        XCTAssertEqual(runtime.adapterID, "theme.example")
+    }
+
     func testRejectsManifestMismatch() {
         let manifest = AdapterManifest(
             id: "theme.other",

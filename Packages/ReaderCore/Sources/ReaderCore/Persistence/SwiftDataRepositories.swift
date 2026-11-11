@@ -17,15 +17,12 @@ private func insertIfNeeded<T: PersistentModel>(_ model: T, into context: ModelC
     }
 }
 
-/// Removes a downloaded page file.
+/// Returns whether a persisted path points inside the app container.
 ///
-/// Only paths inside the app's own container are deleted: `localPath` comes
-/// from persisted data and must never be able to delete arbitrary files.
-@MainActor
-private func removeDownloadedFile(at path: String?) {
-    guard let path, !path.isEmpty else { return }
+/// `localPath` is attacker-controlled only if the database is tampered with,
+/// but validating it keeps reads and deletes scoped to files the app owns.
+private func isPathInsideAppContainer(_ path: String) -> Bool {
     let url = URL(fileURLWithPath: path).standardizedFileURL
-
     let fileManager = FileManager.default
     let roots = [
         fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first,
@@ -33,10 +30,19 @@ private func removeDownloadedFile(at path: String?) {
         fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
     ].compactMap { $0?.standardizedFileURL.path }
 
-    guard roots.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) else {
-        return
+    return roots.contains { root in
+        url.path == root || url.path.hasPrefix(root + "/")
     }
-    try? fileManager.removeItem(at: url)
+}
+
+/// Removes a downloaded page file.
+///
+/// Only paths inside the app's own container are deleted: `localPath` comes
+/// from persisted data and must never be able to delete arbitrary files.
+private func removeDownloadedFile(at path: String?) {
+    guard let path, !path.isEmpty, isPathInsideAppContainer(path) else { return }
+    let url = URL(fileURLWithPath: path).standardizedFileURL
+    try? FileManager.default.removeItem(at: url)
 }
 
 @MainActor
@@ -54,6 +60,15 @@ final class SwiftDataMangaRepository: MangaRepository {
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
         )
         return try context.fetch(descriptor)
+    }
+
+    /// Reads the library snapshot on a background model context.
+    ///
+    /// The main context stays free while a large store is mapped into value
+    /// types; the UI only receives `LibraryEntry` values.
+    func fetchLibraryIndex() async throws -> [LibraryEntry] {
+        let reader = LibraryIndexReader(modelContainer: coordinator.container)
+        return try await reader.entries()
     }
 
     func fetchById(_ id: String) async throws -> MangaEntity? {
@@ -83,18 +98,26 @@ final class SwiftDataMangaRepository: MangaRepository {
     }
 
     func fetchByStatus(_ status: MangaStatus) async throws -> [MangaEntity] {
-        // Older SwiftData versions cannot capture enum values in #Predicate.
-        // Filtering in memory keeps this working across toolchains.
-        let all = try await fetchAll()
-        return all.filter { $0.status == status }
+        // Filter in the store: loading the whole library on the main actor
+        // makes every filter change O(library size) in memory.
+        let descriptor = FetchDescriptor<MangaEntity>(
+            predicate: #Predicate { $0.status == status },
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        return try context.fetch(descriptor)
     }
 
     func fetchByTag(_ tag: String) async throws -> [MangaEntity] {
+        // `tags` is a transformable string array. SwiftData's predicate
+        // compiler accepts `.contains` for it but the store traps at runtime,
+        // so the filter stays in memory until tags get their own relation.
         let all = try await fetchAll()
         return all.filter { $0.tags.contains(tag) }
     }
 
     func search(query: String) async throws -> [MangaEntity] {
+        // Same limitation as `fetchByTag`: authors and tags are transformable
+        // arrays and cannot be queried safely from a predicate.
         let all = try await fetchAll()
         return all.filter { manga in
             manga.title.localizedStandardContains(query)
@@ -110,6 +133,7 @@ final class SwiftDataMangaRepository: MangaRepository {
     }
 
     func delete(_ manga: MangaEntity) async throws {
+        removeDownloadedFiles(for: manga)
         context.delete(manga)
         try coordinator.save()
     }
@@ -117,9 +141,20 @@ final class SwiftDataMangaRepository: MangaRepository {
     func deleteAll() async throws {
         let all = try await fetchAll()
         for manga in all {
+            removeDownloadedFiles(for: manga)
             context.delete(manga)
         }
         try coordinator.save()
+    }
+
+    /// Removes page files before the cascade deletes the rows that point at
+    /// them. SwiftData cascades rows, not files on disk.
+    private func removeDownloadedFiles(for manga: MangaEntity) {
+        for chapter in manga.chapters {
+            for page in chapter.pages {
+                removeDownloadedFile(at: page.localPath)
+            }
+        }
     }
 
     func count() async throws -> Int {
@@ -152,10 +187,13 @@ final class SwiftDataChapterRepository: ChapterRepository {
     }
 
     func fetchByMangaIdAndNumber(_ mangaId: String, number: Double) async throws -> ChapterEntity? {
-        let descriptor = FetchDescriptor<ChapterEntity>(
-            predicate: #Predicate { $0.manga?.id == mangaId && $0.number == number }
-        )
-        return try context.fetch(descriptor).first
+        // Chapter numbers are fractional and stored as `Double`: equality would
+        // miss values produced by different decimal paths (1.1 vs 1.1000001).
+        let chapters = try await fetchByMangaId(mangaId)
+        return chapters.first { chapter in
+            guard let value = chapter.number else { return false }
+            return abs(value - number) < 0.000_001
+        }
     }
 
     func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] {
@@ -213,7 +251,9 @@ final class SwiftDataChapterRepository: ChapterRepository {
     }
 
     func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {
-        guard let chapter = try await fetchById(chapterId) else { return }
+        guard let chapter = try await fetchById(chapterId) else {
+            throw PersistenceError.recordNotFound(entity: "chapter", id: chapterId)
+        }
         chapter.isDownloaded = isDownloaded
         chapter.downloadedPagesCount = downloadedPagesCount
         chapter.downloadedAt = isDownloaded ? Date() : nil
@@ -298,7 +338,12 @@ final class SwiftDataPageRepository: PageRepository {
     }
 
     func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {
-        guard let page = try await fetchById(pageId) else { return }
+        guard let page = try await fetchById(pageId) else {
+            throw PersistenceError.recordNotFound(entity: "page", id: pageId)
+        }
+        if isDownloaded, let localPath, !isPathInsideAppContainer(localPath) {
+            throw PersistenceError.invalidLocalPath(localPath)
+        }
         if !isDownloaded {
             removeDownloadedFile(at: page.localPath)
         }
@@ -345,6 +390,14 @@ final class SwiftDataReadingProgressRepository: ReadingProgressRepository {
     }
 
     func save(_ progress: ReadingProgressEntity) async throws {
+        // A series/chapter pair must have a single row: repeated saves with a
+        // new identifier would otherwise grow the table without limit.
+        if let mangaID = progress.manga?.id, let chapterID = progress.chapter?.id {
+            let existing = try await fetchByMangaIdAndChapterId(mangaID, chapterId: chapterID)
+            for row in existing where row.id != progress.id {
+                context.delete(row)
+            }
+        }
         insertIfNeeded(progress, into: context)
         try coordinator.save()
     }
@@ -449,6 +502,20 @@ final class SwiftDataSiteProfileRepository: SiteProfileRepository {
         } else {
             context.insert(SiteProfileEntity(profile: profile))
         }
+        try coordinator.save()
+    }
+
+    func saveIfAbsent(_ profile: SiteProfile) async throws {
+        if try entity(id: profile.id) != nil {
+            throw SiteProfileError.alreadyExists(profile.baseURL)
+        }
+        let descriptor = FetchDescriptor<SiteProfileEntity>(
+            predicate: #Predicate { $0.baseURL == profile.baseURL }
+        )
+        if try !context.fetch(descriptor).isEmpty {
+            throw SiteProfileError.alreadyExists(profile.baseURL)
+        }
+        context.insert(SiteProfileEntity(profile: profile))
         try coordinator.save()
     }
 

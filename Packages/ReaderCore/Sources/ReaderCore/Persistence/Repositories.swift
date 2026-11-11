@@ -3,9 +3,9 @@
 import Foundation
 import SwiftData
 
-// The SwiftData models live in Domain/Entities.swift. The contract DTOs with
-// the same concepts live in Models.swift; persistence works with the entity
-// types so that adapter payloads never leak into the local store.
+// The SwiftData models live in Persistence/Entities.swift. The contract DTOs
+// live in Domain/ContractModels.swift; persistence works with the entity types
+// so that adapter payloads never leak into the local store.
 
 // MARK: - Repository Protocols
 
@@ -24,6 +24,19 @@ public protocol MangaRepository {
     func delete(_ manga: MangaEntity) async throws
     func deleteAll() async throws
     func count() async throws -> Int
+    /// Returns the lightweight rows the library screen renders.
+    ///
+    /// The default implementation maps a full fetch, which is fine for small
+    /// stores and test doubles. The SwiftData store reads the snapshot on a
+    /// background `ModelActor` so a large library does not stall the main
+    /// actor (REP-01).
+    func fetchLibraryIndex() async throws -> [LibraryEntry]
+}
+
+extension MangaRepository {
+    public func fetchLibraryIndex() async throws -> [LibraryEntry] {
+        try await fetchAll().map(LibraryEntry.init)
+    }
 }
 
 /// Protocol for chapter persistence operations
@@ -92,7 +105,28 @@ public protocol SiteProfileRepository {
     func fetch(id: String) async throws -> SiteProfile?
     func fetchByBaseURL(_ baseURL: String) async throws -> SiteProfile?
     func save(_ profile: SiteProfile) async throws
+
+    /// Inserts a profile only when neither its id nor its base URL exists.
+    ///
+    /// Implementations must check and insert without suspending, so two
+    /// concurrent add operations cannot both pass the duplicate check.
+    func saveIfAbsent(_ profile: SiteProfile) async throws
+
     func delete(_ profile: SiteProfile) async throws
+}
+
+extension SiteProfileRepository {
+    /// Best-effort fallback for lightweight implementations. The SwiftData
+    /// store overrides it with a check and insert that do not suspend.
+    public func saveIfAbsent(_ profile: SiteProfile) async throws {
+        if try await fetch(id: profile.id) != nil {
+            throw SiteProfileError.alreadyExists(profile.baseURL)
+        }
+        if try await fetchByBaseURL(profile.baseURL) != nil {
+            throw SiteProfileError.alreadyExists(profile.baseURL)
+        }
+        try await save(profile)
+    }
 }
 
 // MARK: - Composite Repository Protocol

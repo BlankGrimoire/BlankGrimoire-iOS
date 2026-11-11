@@ -70,6 +70,13 @@ public actor MemoryImageCache: ImageCache {
     }
 
     public func setData(_ data: Data, for key: String) async {
+        // An entry larger than the whole cache would evict everything and then
+        // itself; reject it instead of thrashing the cache.
+        guard UInt64(data.count) <= maxSize else {
+            await removeData(for: key)
+            return
+        }
+
         if let existing = map[key] {
             // Update existing
             let sizeDiff = Int64(data.count) - Int64(existing.data.count)
@@ -92,7 +99,8 @@ public actor MemoryImageCache: ImageCache {
 
     public func removeData(for key: String) async {
         guard let node = map.removeValue(forKey: key) else { return }
-        _currentSize -= UInt64(node.data.count)
+        let size = UInt64(node.data.count)
+        _currentSize = _currentSize >= size ? _currentSize - size : 0
         removeNode(node)
     }
 
@@ -144,7 +152,7 @@ public actor DiskImageCache: ImageCache {
     private var _currentSize: UInt64 = 0
     private var index: [String: DiskCacheEntry] = [:]
 
-    private struct DiskCacheEntry: Codable {
+    private struct DiskCacheEntry: Codable, Sendable {
         let key: String
         let fileName: String
         let size: UInt64
@@ -167,17 +175,39 @@ public actor DiskImageCache: ImageCache {
 
     private func loadIndex() async {
         let indexURL = directory.appendingPathComponent("index.json")
-        if FileManager.default.fileExists(atPath: indexURL.path) {
-            do {
-                let data = try Data(contentsOf: indexURL)
-                let entries = try JSONDecoder().decode([DiskCacheEntry].self, from: data)
-                for entry in entries {
-                    index[entry.key] = entry
-                    _currentSize += entry.size
-                }
-            } catch {
-                // Ignore corrupted index
+        let decoded: [DiskCacheEntry] = await Task.detached(priority: .utility) {
+            guard FileManager.default.fileExists(atPath: indexURL.path),
+                let data = try? Data(contentsOf: indexURL),
+                let entries = try? JSONDecoder().decode([DiskCacheEntry].self, from: data)
+            else {
+                return []
             }
+            return entries
+        }.value
+
+        // Reconcile the index with the files: entries whose file disappeared
+        // are dropped instead of being served as misses forever.
+        var knownFiles = Set<String>()
+        for entry in decoded {
+            let fileURL = directory.appendingPathComponent(entry.fileName)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { continue }
+            index[entry.key] = entry
+            _currentSize += entry.size
+            knownFiles.insert(entry.fileName)
+        }
+
+        // Remove orphan `.img` files left behind by earlier versions.
+        let files =
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )) ?? []
+        for file in files where file.pathExtension == "img" && !knownFiles.contains(file.lastPathComponent) {
+            try? FileManager.default.removeItem(at: file)
+        }
+
+        if knownFiles.count != decoded.count {
+            await saveIndex()
         }
     }
 
@@ -193,13 +223,9 @@ public actor DiskImageCache: ImageCache {
         guard let entry = index[key] else { return nil }
 
         let fileURL = directory.appendingPathComponent(entry.fileName)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            index.removeValue(forKey: key)
-            await saveIndex()
-            return nil
-        }
 
-        // Update access time
+        // The access time only feeds LRU eviction. Persisting it on every read
+        // rewrote the whole index for each cache hit.
         index[key] = DiskCacheEntry(
             key: entry.key,
             fileName: entry.fileName,
@@ -207,9 +233,20 @@ public actor DiskImageCache: ImageCache {
             lastAccessed: Date(),
             createdAt: entry.createdAt
         )
-        await saveIndex()
 
-        return try? Data(contentsOf: fileURL)
+        let data: Data? = await Task.detached(priority: .userInitiated) {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+            return try? Data(contentsOf: fileURL)
+        }.value
+
+        guard let data else {
+            // The file disappeared behind the index: drop the stale entry.
+            index.removeValue(forKey: key)
+            _currentSize = _currentSize >= entry.size ? _currentSize - entry.size : 0
+            await saveIndex()
+            return nil
+        }
+        return data
     }
 
     public func setData(_ data: Data, for key: String) async {
@@ -227,68 +264,67 @@ public actor DiskImageCache: ImageCache {
             }
         }
 
-        // Write new data
-        do {
-            try data.write(to: fileURL, options: .atomic)
+        // Write new data off the actor: disk writes block whoever awaits them.
+        let written = await Task.detached(priority: .utility) {
+            (try? data.write(to: fileURL, options: .atomic)) != nil
+        }.value
 
-            let entry = DiskCacheEntry(
-                key: key,
-                fileName: fileName,
-                size: UInt64(data.count),
-                lastAccessed: Date(),
-                createdAt: Date()
-            )
-
-            _currentSize += entry.size
-            index[key] = entry
-            await saveIndex()
-
-            // Evict if needed
-            await evictIfNeeded()
-        } catch {
+        guard written else {
             // Clean up on failure and persist the removal of the old entry.
-            try? FileManager.default.removeItem(at: fileURL)
+            await Task.detached(priority: .utility) {
+                try? FileManager.default.removeItem(at: fileURL)
+            }.value
             await saveIndex()
+            return
         }
+
+        let entry = DiskCacheEntry(
+            key: key,
+            fileName: fileName,
+            size: UInt64(data.count),
+            lastAccessed: Date(),
+            createdAt: Date()
+        )
+
+        _currentSize += entry.size
+        index[key] = entry
+        await saveIndex()
+
+        // Evict if needed
+        await evictIfNeeded()
     }
 
     public func removeData(for key: String) async {
         guard let entry = index.removeValue(forKey: key) else { return }
         _currentSize = _currentSize >= entry.size ? _currentSize - entry.size : 0
         let fileURL = directory.appendingPathComponent(entry.fileName)
-        try? FileManager.default.removeItem(at: fileURL)
+        await Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: fileURL)
+        }.value
         await saveIndex()
     }
 
     public func clear() async {
-        for entry in index.values {
-            let fileURL = directory.appendingPathComponent(entry.fileName)
-            try? FileManager.default.removeItem(at: fileURL)
-        }
+        let files = index.values.map { directory.appendingPathComponent($0.fileName) }
         index.removeAll()
         _currentSize = 0
+        await Task.detached(priority: .utility) {
+            for fileURL in files {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+        }.value
         await saveIndex()
     }
 
     // MARK: - Helpers
 
-    private func loadIndexSync() throws {
-        let indexURL = directory.appendingPathComponent("index.json")
-        if FileManager.default.fileExists(atPath: indexURL.path) {
-            let data = try Data(contentsOf: indexURL)
-            let entries = try JSONDecoder().decode([DiskCacheEntry].self, from: data)
-            for entry in entries {
-                index[entry.key] = entry
-                _currentSize += entry.size
-            }
-        }
-    }
-
     private func saveIndex() async {
         let entries = Array(index.values)
-        if let data = try? JSONEncoder().encode(entries) {
-            try? data.write(to: directory.appendingPathComponent("index.json"), options: .atomic)
-        }
+        let indexURL = directory.appendingPathComponent("index.json")
+        await Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(entries) else { return }
+            try? data.write(to: indexURL, options: .atomic)
+        }.value
     }
 
     private func cacheKey(for key: String) -> String {

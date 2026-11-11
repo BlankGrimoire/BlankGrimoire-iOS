@@ -57,10 +57,10 @@ public enum AdapterStoreError: Error, LocalizedError, Sendable, Equatable {
     }
 }
 
-// The canonical RepositoryIndex and ExtensionEntry are defined in Models.swift
+// The canonical RepositoryIndex and ExtensionEntry are defined in Domain/ContractModels.swift
 // import them via the module - no redefinition needed
 
-// The canonical AdapterManifest is defined in Models.swift
+// The canonical AdapterManifest is defined in Domain/ContractModels.swift
 // import it via the module - no redefinition needed
 
 // MARK: - Ed25519 Verification
@@ -195,6 +195,33 @@ public struct TrustedRepository: Codable, Sendable, Equatable {
             throw AdapterStoreError.publicKeyMismatch
         }
     }
+
+    /// Short, human-checkable fingerprint of the repository key.
+    ///
+    /// Derived from the decoded key bytes so different base64 encodings of the
+    /// same key produce the same fingerprint. The full base64 key stays in the
+    /// trust record but is unreadable when shown to a person.
+    public var keyFingerprint: String {
+        AdapterKeyFingerprint.short(of: publicKey)
+    }
+}
+
+/// Formats adapter repository keys for display.
+public enum AdapterKeyFingerprint {
+    /// Returns the first 16 hex characters of the SHA-256 of the key, in
+    /// groups of four (`ABCD EF01 2345 6789`).
+    public static func short(of publicKey: String) -> String {
+        let rawKey = publicKey.split(separator: ":").last.map(String.init) ?? publicKey
+        let digest = SHA256.hash(data: Data(rawKey.utf8))
+        let hex = digest.map { String(format: "%02X", $0) }.joined().prefix(16)
+        return stride(from: 0, to: hex.count, by: 4)
+            .map { offset in
+                let start = hex.index(hex.startIndex, offsetBy: offset)
+                let end = hex.index(start, offsetBy: 4)
+                return String(hex[start..<end])
+            }
+            .joined(separator: " ")
+    }
 }
 
 // MARK: - Adapter Store Protocol
@@ -310,7 +337,12 @@ public final class DefaultAdapterStore: AdapterStore {
         }
 
         let request = HttpRequest(url: indexURL.absoluteString, method: "GET")
-        let response = try await repositoryRequestHandler(for: indexURL.absoluteString).perform(request)
+        let response: HttpResponse
+        do {
+            response = try await repositoryRequestHandler(for: indexURL.absoluteString).perform(request)
+        } catch {
+            throw AdapterStoreError.networkError(Self.describedNetworkError(error))
+        }
 
         guard response.status >= 200 && response.status < 300 else {
             throw AdapterStoreError.networkError("HTTP \(response.status): \(response.body)")
@@ -428,7 +460,7 @@ public final class DefaultAdapterStore: AdapterStore {
             if existing.version == version {
                 throw AdapterStoreError.adapterAlreadyInstalled(id)
             }
-            guard Self.compareVersions(version, existing.version) == .orderedDescending else {
+            guard AdapterVersion(version) > AdapterVersion(existing.version) else {
                 throw AdapterStoreError.downgradeNotAllowed(
                     id: id,
                     installed: existing.version,
@@ -440,7 +472,12 @@ public final class DefaultAdapterStore: AdapterStore {
         // 4. Download bundle
         let bundleURL = resolveBundleURL(entry.bundleURL, baseURL: canonicalURL)
         let request = HttpRequest(url: bundleURL, method: "GET")
-        let response = try await repositoryRequestHandler(for: bundleURL).perform(request)
+        let response: HttpResponse
+        do {
+            response = try await repositoryRequestHandler(for: bundleURL).perform(request)
+        } catch {
+            throw AdapterStoreError.bundleDownloadFailed(Self.describedNetworkError(error))
+        }
 
         guard response.status >= 200 && response.status < 300 else {
             throw AdapterStoreError.bundleDownloadFailed("HTTP \(response.status)")
@@ -448,10 +485,8 @@ public final class DefaultAdapterStore: AdapterStore {
 
         let bundleData = Data(response.body.utf8)
 
-        // 5. Verify SHA-256
-        try SHA256Verifier.verify(bundleData, expectedHex: entry.sha256)
-
-        // 6. Verify Ed25519 signature against the trusted key for this URL.
+        // 5. Verify the bundle and parse it off the main actor. Hashing,
+        // signature verification and regex parsing would otherwise block the UI.
         let trustedRepos = try await listTrustedRepositories()
         guard let trusted = trustedRepos.first(where: { $0.url == canonicalURL }) else {
             throw AdapterStoreError.repositoryNotTrusted(canonicalURL)
@@ -460,43 +495,22 @@ public final class DefaultAdapterStore: AdapterStore {
         // The index must be signed by the same key the user approved.
         try trusted.verifyIndex(index)
 
-        let publicKey = try Ed25519Verifier.extractPublicKey(from: trusted.publicKey)
-        try Ed25519Verifier.verify(
-            signatureBase64: entry.bundleSignature,
-            data: bundleData,
-            publicKey: publicKey
+        let verified = try await Self.verifyBundle(
+            bundleData,
+            entry: entry,
+            publicKeyString: trusted.publicKey
         )
 
-        // 7. Parse manifest from bundle (first few KB should contain the manifest)
-        let manifest = try parseManifest(from: bundleData)
-
-        // 8. Verify manifest matches entry
-        guard manifest.id == entry.id else {
-            throw AdapterStoreError.bundleVerificationFailed(
-                "Manifest ID mismatch: expected \(entry.id), got \(manifest.id)")
-        }
-        guard manifest.version == entry.version else {
-            throw AdapterStoreError.bundleVerificationFailed(
-                "Manifest version mismatch: expected \(entry.version), got \(manifest.version)")
-        }
-        guard manifest.apiVersion == entry.apiVersion else {
-            throw AdapterStoreError.bundleVerificationFailed(
-                "API version mismatch: expected \(entry.apiVersion), got \(manifest.apiVersion)")
-        }
-        guard manifest.sha256 == entry.sha256 else {
-            throw AdapterStoreError.bundleVerificationFailed("Manifest SHA-256 mismatch")
-        }
-
-        // 9. Store bundle
+        // 6. Store bundle
         let themeAdapter = ThemeAdapter(
-            id: manifest.id,
-            name: manifest.name,
-            version: manifest.version,
-            detectionSignature: manifest.detectionSignature,
-            selectors: try extractSelectors(from: bundleData)
+            id: verified.manifest.id,
+            name: verified.manifest.name,
+            version: verified.manifest.version,
+            detectionSignature: verified.manifest.detectionSignature,
+            selectors: verified.selectors
         )
         let bundle = AdapterBundle(
-            manifest: manifest,
+            manifest: verified.manifest,
             themeAdapter: themeAdapter,
             bundleData: bundleData,
             sourceRepositoryURL: canonicalURL
@@ -554,7 +568,7 @@ public final class DefaultAdapterStore: AdapterStore {
             // Find entry for this adapter
             if let entry = index.extensions.first(where: { $0.id == adapter.id }),
                 entry.version != adapter.version,
-                entry.version.compare(adapter.version, options: .numeric) == .orderedDescending
+                AdapterVersion(entry.version) > AdapterVersion(adapter.version)
             {
                 updates.append((adapter, entry))
             }
@@ -570,7 +584,7 @@ public final class DefaultAdapterStore: AdapterStore {
         }
 
         // Reject downgrades before uninstalling the current bundle.
-        guard Self.compareVersions(version, adapter.version) == .orderedDescending else {
+        guard AdapterVersion(version) > AdapterVersion(adapter.version) else {
             throw AdapterStoreError.downgradeNotAllowed(
                 id: id,
                 installed: adapter.version,
@@ -587,18 +601,55 @@ public final class DefaultAdapterStore: AdapterStore {
 
     // MARK: - Helpers
 
-    /// Compares dotted numeric versions without relying on `Double`.
-    static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
-        let left = lhs.split(separator: ".").map { Int($0) ?? 0 }
-        let right = rhs.split(separator: ".").map { Int($0) ?? 0 }
-        let count = max(left.count, right.count)
-        for index in 0..<count {
-            let l = index < left.count ? left[index] : 0
-            let r = index < right.count ? right[index] : 0
-            if l < r { return .orderedAscending }
-            if l > r { return .orderedDescending }
+    /// Keeps the underlying network cause visible to the UI and diagnostics.
+    private nonisolated static func describedNetworkError(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            return "\(urlError.localizedDescription) (URLError \(urlError.code.rawValue))"
         }
-        return .orderedSame
+        return error.localizedDescription
+    }
+
+    /// Verifies and parses a downloaded bundle away from the main actor.
+    ///
+    /// SHA-256, Ed25519 verification and the regex-based manifest/selector
+    /// extraction are CPU work; running them on the main actor stalls the UI
+    /// during installs and updates.
+    private nonisolated static func verifyBundle(
+        _ bundleData: Data,
+        entry: ExtensionEntry,
+        publicKeyString: String
+    ) async throws -> (manifest: AdapterManifest, selectors: ThemeSelectors) {
+        try await Task.detached(priority: .userInitiated) {
+            try SHA256Verifier.verify(bundleData, expectedHex: entry.sha256)
+
+            let publicKey = try Ed25519Verifier.extractPublicKey(from: publicKeyString)
+            try Ed25519Verifier.verify(
+                signatureBase64: entry.bundleSignature,
+                data: bundleData,
+                publicKey: publicKey
+            )
+
+            let manifest = try parseManifest(from: bundleData)
+
+            guard manifest.id == entry.id else {
+                throw AdapterStoreError.bundleVerificationFailed(
+                    "Manifest ID mismatch: expected \(entry.id), got \(manifest.id)")
+            }
+            guard manifest.version == entry.version else {
+                throw AdapterStoreError.bundleVerificationFailed(
+                    "Manifest version mismatch: expected \(entry.version), got \(manifest.version)")
+            }
+            guard manifest.apiVersion == entry.apiVersion else {
+                throw AdapterStoreError.bundleVerificationFailed(
+                    "API version mismatch: expected \(entry.apiVersion), got \(manifest.apiVersion)")
+            }
+            guard manifest.sha256 == entry.sha256 else {
+                throw AdapterStoreError.bundleVerificationFailed("Manifest SHA-256 mismatch")
+            }
+
+            let selectors = try extractSelectors(from: bundleData)
+            return (manifest, selectors)
+        }.value
     }
 
     private func repositoryRequestHandler(for urlString: String) throws -> PluginRequestHandler {
@@ -633,7 +684,7 @@ public final class DefaultAdapterStore: AdapterStore {
         return resolved.absoluteString
     }
 
-    private func parseManifest(from bundleData: Data) throws -> AdapterManifest {
+    private nonisolated static func parseManifest(from bundleData: Data) throws -> AdapterManifest {
         // The bundle is a JavaScript file. We need to extract the manifest from it.
         // The manifest is exposed as `BlankGrimoireRuntime.default` or similar.
         // For simplicity, we'll parse it as JSON if it starts with {, otherwise
@@ -665,7 +716,7 @@ public final class DefaultAdapterStore: AdapterStore {
         throw AdapterStoreError.bundleVerificationFailed("Could not extract manifest from bundle")
     }
 
-    private func extractSelectors(from bundleData: Data) throws -> ThemeSelectors {
+    private nonisolated static func extractSelectors(from bundleData: Data) throws -> ThemeSelectors {
         let bundleString = String(decoding: bundleData, as: UTF8.self)
 
         // Look for the selectors object in the bundle
@@ -736,7 +787,7 @@ public final class InstalledAdapterEntity {
     public var detectionSignature: ThemeSignature
     public var themeSelectors: ThemeSelectors
     public var sha256: String
-    public var bundleData: Data
+    @Attribute(.externalStorage) public var bundleData: Data
     public var sourceRepositoryURL: String
     public var installedAt: Date
 
@@ -785,18 +836,10 @@ public final class InstalledAdapterEntity {
     extension DefaultAdapterStore {
         /// Creates an in-memory adapter store for testing.
         public static func createInMemory() throws -> DefaultAdapterStore {
-            let schema = Schema([
-                TrustedRepositoryEntity.self,
-                InstalledAdapterEntity.self,
-            ])
-
-            let configuration = ModelConfiguration(
-                "Test",
-                isStoredInMemoryOnly: true
+            let container = try BlankGrimoireSchema.makeContainer(
+                isStoredInMemoryOnly: true,
+                name: "AdapterStoreTest"
             )
-
-            let container = try ModelContainer(for: schema, configurations: [configuration])
-
             return try DefaultAdapterStore(modelContainer: container)
         }
 

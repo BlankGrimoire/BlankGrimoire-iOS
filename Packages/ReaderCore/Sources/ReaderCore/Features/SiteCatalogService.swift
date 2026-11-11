@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import Foundation
+import SwiftSoup
 
 /// Default cross-site catalog backed by the installed JavaScript adapters.
 @MainActor
@@ -12,6 +13,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
     private let logger: any PluginLogger
     private let bridgeFactory: AdapterBridgeFactory
     private let runtimeFactory: AdapterRuntimeFactory
+    private let sessionPool: AdapterSessionPool
 
     public convenience init(
         siteProfileRepository: any SiteProfileRepository,
@@ -38,7 +40,8 @@ public final class SiteCatalogService: SiteCatalogProviding {
         adapterStore: any AdapterStore,
         logger: any PluginLogger,
         bridgeFactory: @escaping AdapterBridgeFactory,
-        runtimeFactory: @escaping AdapterRuntimeFactory
+        runtimeFactory: @escaping AdapterRuntimeFactory,
+        sessionPool: AdapterSessionPool = AdapterSessionPool()
     ) {
         self.siteProfileRepository = siteProfileRepository
         self.mangaRepository = mangaRepository
@@ -47,26 +50,66 @@ public final class SiteCatalogService: SiteCatalogProviding {
         self.logger = logger
         self.bridgeFactory = bridgeFactory
         self.runtimeFactory = runtimeFactory
+        self.sessionPool = sessionPool
     }
 
     // MARK: - Search
 
     public func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
+        await runSearch(query: query, profiles: profiles, startURLs: nil)
+    }
+
+    public func searchNextPage(
+        query: String,
+        in profiles: [SiteProfile],
+        continuingFrom outcome: SiteSearchOutcome
+    ) async -> SiteSearchOutcome {
+        let startURLs = outcome.nextPageURLs
+        guard !startURLs.isEmpty else {
+            return SiteSearchOutcome()
+        }
+        return await runSearch(query: query, profiles: profiles, startURLs: startURLs)
+    }
+
+    /// Shared implementation for the first page and the follow-up pages.
+    ///
+    /// `startURLs` is nil for the first page: each site's search URL is built
+    /// from its theme. For a follow-up page it holds the URL extracted from
+    /// each site's own "next" link.
+    private func runSearch(
+        query: String,
+        profiles: [SiteProfile],
+        startURLs: [String: String]?
+    ) async -> SiteSearchOutcome {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return SiteSearchOutcome()
         }
 
-        let targets = profiles.filter(\.isEnabled)
+        let targets: [SiteProfile]
+        if let startURLs {
+            // Sites that did not announce another page are simply skipped.
+            targets = profiles.filter { $0.isEnabled && startURLs[$0.id] != nil }
+        } else {
+            targets = profiles.filter(\.isEnabled)
+        }
         guard !targets.isEmpty else {
             return SiteSearchOutcome()
         }
 
-        var results: [SiteSearchResult] = []
+        var resultsBySite: [String: [SiteSearchResult]] = [:]
         var failures: [SiteSearchFailure] = []
+        var nextPageURLs: [String: String] = [:]
+        // Opening one JavaScript context per site is expensive; a small window
+        // keeps memory bounded when many sites are enabled.
+        let maxConcurrent = 3
+        let pageNumber = startURLs == nil ? 1 : 2
 
         await withTaskGroup(of: SiteSearchSiteOutcome.self) { group in
-            for profile in targets {
+            var remaining = targets.makeIterator()
+
+            for _ in 0..<min(maxConcurrent, targets.count) {
+                guard let profile = remaining.next() else { break }
                 group.addTask { [weak self] in
                     guard let self else {
                         return .failure(
@@ -77,30 +120,69 @@ public final class SiteCatalogService: SiteCatalogProviding {
                             )
                         )
                     }
-                    return await self.searchWithTimeout(profile: profile, query: trimmed)
+                    return await self.searchWithTimeout(
+                        profile: profile,
+                        query: trimmed,
+                        page: pageNumber,
+                        startURL: startURLs?[profile.id]
+                    )
                 }
             }
 
-            for await outcome in group {
+            while let outcome = await group.next() {
                 switch outcome {
-                case .success(let siteResults):
-                    results.append(contentsOf: siteResults)
+                case .success(let siteProfileID, let siteResults, let nextPageURL):
+                    resultsBySite[siteProfileID] = siteResults
+                    if let nextPageURL {
+                        nextPageURLs[siteProfileID] = nextPageURL
+                    }
                 case .failure(let failure):
                     failures.append(failure)
                 }
+
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+
+                if let profile = remaining.next() {
+                    group.addTask { [weak self] in
+                        guard let self else {
+                            return .failure(
+                                SiteSearchFailure(
+                                    siteProfileID: profile.id,
+                                    siteName: profile.name,
+                                    message: SiteBrowsingError.catalogUnavailable.localizedDescription
+                                )
+                            )
+                        }
+                        return await self.searchWithTimeout(
+                            profile: profile,
+                            query: trimmed,
+                            page: pageNumber,
+                            startURL: startURLs?[profile.id]
+                        )
+                    }
+                }
             }
         }
 
-        results.sort {
-            let comparison = $0.title.localizedStandardCompare($1.title)
-            if comparison == .orderedSame {
-                return $0.siteName.localizedStandardCompare($1.siteName) == .orderedAscending
-            }
-            return comparison == .orderedAscending
-        }
+        // Adapters occasionally repeat a series in their result list. SwiftUI
+        // lists need unique identifiers, and the first occurrence wins.
+        var seen = Set<String>()
+        // Keep the adapter's relevance order inside each site, and the site
+        // order used for the search, instead of re-sorting everything by title.
+        let results =
+            targets
+            .flatMap { resultsBySite[$0.id] ?? [] }
+            .filter { seen.insert($0.id).inserted }
         failures.sort { $0.siteName.localizedStandardCompare($1.siteName) == .orderedAscending }
 
-        return SiteSearchOutcome(results: results, failures: failures)
+        return SiteSearchOutcome(
+            results: results,
+            failures: failures,
+            nextPageURLs: nextPageURLs
+        )
     }
 
     /// Runs one site search with a hard deadline.
@@ -109,11 +191,13 @@ public final class SiteCatalogService: SiteCatalogProviding {
     private func searchWithTimeout(
         profile: SiteProfile,
         query: String,
+        page: Int,
+        startURL: String?,
         timeout: Duration = .seconds(20)
     ) async -> SiteSearchSiteOutcome {
         await withTaskGroup(of: SiteSearchSiteOutcome?.self) { group in
             group.addTask {
-                await self.search(profile: profile, query: query)
+                await self.search(profile: profile, query: query, page: page, startURL: startURL)
             }
             group.addTask {
                 try? await Task.sleep(for: timeout)
@@ -134,44 +218,60 @@ public final class SiteCatalogService: SiteCatalogProviding {
         }
     }
 
-    private func search(profile: SiteProfile, query: String) async -> SiteSearchSiteOutcome {
+    private func search(
+        profile: SiteProfile,
+        query: String,
+        page: Int,
+        startURL: String?
+    ) async -> SiteSearchSiteOutcome {
         do {
-            let session = try await AdapterSession.open(
+            let lease = try await sessionPool.acquire(
                 profile: profile,
                 adapterStore: adapterStore,
                 bridgeFactory: bridgeFactory,
                 runtimeFactory: runtimeFactory
             )
+            defer { lease.release() }
+            let session = lease.session
 
-            do {
-                let searchURL = try makeSearchURL(profile: profile, bundle: session.bundle, query: query)
-                let html = try await fetchHTML(searchURL, session: session)
-                let context = PluginPageContext(
-                    html: html,
-                    baseURL: profile.baseURL,
-                    siteName: profile.name,
-                    overrides: profile.selectorOverrides
-                )
-                let page = try await session.runtime.search(
-                    SearchQuery(text: query, page: 1),
-                    in: context
-                )
-                let results = page.items.map { summary in
-                    SiteSearchResult(
-                        siteProfileID: profile.id,
-                        siteName: profile.name,
-                        siteURL: profile.baseURL,
-                        key: summary.key,
-                        title: summary.title,
-                        coverURL: summary.coverURL
-                    )
-                }
-                await session.dispose()
-                return .success(results)
-            } catch {
-                await session.dispose()
-                throw error
+            let searchURL: URL
+            if let startURL, let url = URL(string: startURL) {
+                searchURL = url
+            } else {
+                searchURL = try makeSearchURL(profile: profile, bundle: session.bundle, query: query)
             }
+            let html = try await fetchHTML(searchURL, session: session)
+            let context = PluginPageContext(
+                html: html,
+                baseURL: searchURL.absoluteString,
+                siteName: profile.name,
+                overrides: profile.selectorOverrides
+            )
+            let resultPage = try await session.runtime.search(
+                SearchQuery(text: query, page: page),
+                in: context
+            )
+            let results = resultPage.items.map { summary in
+                SiteSearchResult(
+                    siteProfileID: profile.id,
+                    siteName: profile.name,
+                    siteURL: profile.baseURL,
+                    key: summary.key,
+                    title: summary.title,
+                    coverURL: summary.coverURL
+                )
+            }
+            let nextURL = nextPageURL(
+                in: html,
+                pageURL: searchURL,
+                profile: profile,
+                bundle: session.bundle
+            )
+            return .success(
+                siteProfileID: profile.id,
+                results: results,
+                nextPageURL: nextURL?.absoluteString
+            )
         } catch {
             logger.error(
                 "Search failed for \(profile.name): \(error.localizedDescription)",
@@ -219,15 +319,52 @@ public final class SiteCatalogService: SiteCatalogProviding {
             throw SiteBrowsingError.invalidSearchURL(path)
         }
 
+        // Honour a query parameter already present in the search path (for
+        // example WordPress' `?s=`), otherwise fall back to the historical `q`.
         var items = components.queryItems ?? []
-        items.removeAll { $0.name == "q" }
-        items.append(URLQueryItem(name: "q", value: query))
+        let parameterName = items.first { $0.value?.isEmpty != false }?.name ?? "q"
+        items.removeAll { $0.name == parameterName }
+        items.append(URLQueryItem(name: parameterName, value: query))
         components.queryItems = items
+        // URLComponents leaves `+` as-is in query values, but servers decode it
+        // as a space; force the percent-encoded form (`C++` -> `C%2B%2B`).
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
 
         guard let url = components.url else {
             throw SiteBrowsingError.invalidSearchURL(path)
         }
         try validateSameSite(url, profile: profile)
+        return url
+    }
+
+    /// Extracts the URL of the next result page from the current HTML.
+    ///
+    /// Pagination is driven by the selector declared by the theme, not by a
+    /// guessed `?page=` parameter, so it works for sites with any URL scheme.
+    private func nextPageURL(
+        in html: String,
+        pageURL: URL,
+        profile: SiteProfile,
+        bundle: AdapterBundle
+    ) -> URL? {
+        let selector =
+            profile.selectorOverrides.search?.nextPage
+            ?? bundle.themeAdapter.selectors.search.nextPage
+        guard let selector, !selector.isEmpty,
+            let document = try? SwiftSoup.parse(html),
+            let element = try? document.select(selector).first(),
+            let href = try? element.attr("href"),
+            !href.isEmpty,
+            !href.hasPrefix("#"),
+            let url = URL(string: href, relativeTo: pageURL)?.absoluteURL
+        else {
+            return nil
+        }
+
+        guard (try? validateSameSite(url, profile: profile)) != nil else {
+            return nil
+        }
         return url
     }
 
@@ -251,34 +388,30 @@ public final class SiteCatalogService: SiteCatalogProviding {
             throw SiteBrowsingError.siteProfileNotFound(result.siteProfileID)
         }
 
-        let session = try await AdapterSession.open(
+        let lease = try await sessionPool.acquire(
             profile: profile,
             adapterStore: adapterStore,
             bridgeFactory: bridgeFactory,
             runtimeFactory: runtimeFactory
         )
+        defer { lease.release() }
+        let session = lease.session
 
-        do {
-            guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
-                throw SiteBrowsingError.invalidSiteURL(result.key)
-            }
-            let html = try await fetchHTML(detailsURL, session: session)
-            let context = PluginPageContext(
-                html: html,
-                baseURL: profile.baseURL,
-                siteName: profile.name,
-                overrides: profile.selectorOverrides
-            )
-
-            let details = try await session.runtime.details(for: result.key, in: context)
-            let chapters = try await session.runtime.chapters(for: result.key, in: context)
-            let manga = try await persist(details: details, chapters: chapters, profile: profile)
-            await session.dispose()
-            return manga
-        } catch {
-            await session.dispose()
-            throw error
+        guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
+            throw SiteBrowsingError.invalidSiteURL(result.key)
         }
+        let html = try await fetchHTML(detailsURL, session: session)
+        let context = PluginPageContext(
+            html: html,
+            baseURL: detailsURL.absoluteString,
+            siteName: profile.name,
+            overrides: profile.selectorOverrides
+        )
+
+        let details = try await session.runtime.details(for: result.key, in: context)
+        let chapters = try await session.runtime.chapters(for: result.key, in: context)
+        let manga = try await persist(details: details, chapters: chapters, profile: profile)
+        return manga
     }
 
     /// Refreshes details and chapter list for an already imported series.
@@ -290,34 +423,30 @@ public final class SiteCatalogService: SiteCatalogProviding {
             throw SiteBrowsingError.siteProfileNotFound(manga.siteProfileID ?? manga.siteURL ?? manga.id)
         }
 
-        let session = try await AdapterSession.open(
+        let lease = try await sessionPool.acquire(
             profile: profile,
             adapterStore: adapterStore,
             bridgeFactory: bridgeFactory,
             runtimeFactory: runtimeFactory
         )
+        defer { lease.release() }
+        let session = lease.session
 
-        do {
-            let key = manga.adapterKey
-            guard let detailsURL = AdapterSession.absoluteURL(key, baseURL: profile.baseURL) else {
-                throw SiteBrowsingError.invalidSiteURL(key)
-            }
-            let html = try await fetchHTML(detailsURL, session: session)
-            let context = PluginPageContext(
-                html: html,
-                baseURL: profile.baseURL,
-                siteName: profile.name,
-                overrides: profile.selectorOverrides
-            )
-
-            let details = try await session.runtime.details(for: key, in: context)
-            let chapters = try await session.runtime.chapters(for: key, in: context)
-            _ = try await persist(details: details, chapters: chapters, profile: profile, existing: manga)
-            await session.dispose()
-        } catch {
-            await session.dispose()
-            throw error
+        let key = manga.adapterKey
+        guard let detailsURL = AdapterSession.absoluteURL(key, baseURL: profile.baseURL) else {
+            throw SiteBrowsingError.invalidSiteURL(key)
         }
+        let html = try await fetchHTML(detailsURL, session: session)
+        let context = PluginPageContext(
+            html: html,
+            baseURL: detailsURL.absoluteString,
+            siteName: profile.name,
+            overrides: profile.selectorOverrides
+        )
+
+        let details = try await session.runtime.details(for: key, in: context)
+        let chapters = try await session.runtime.chapters(for: key, in: context)
+        _ = try await persist(details: details, chapters: chapters, profile: profile, existing: manga)
     }
 
     /// Finds the site profile that owns a persisted series.
@@ -355,8 +484,10 @@ public final class SiteCatalogService: SiteCatalogProviding {
         details.apply(to: manga)
         manga.siteProfileID = profile.id
         manga.siteName = details.attribution?.siteName ?? profile.name
-        manga.siteURL = details.attribution?.siteURL ?? profile.baseURL
-        manga.siteLogoURL = details.attribution?.logoURL
+        manga.siteURL =
+            sanitizedAttributionURL(details.attribution?.siteURL, profile: profile)
+            ?? profile.baseURL
+        manga.siteLogoURL = sanitizedAttributionURL(details.attribution?.logoURL, profile: profile)
         manga.siteCredits = details.attribution?.credits
         try await mangaRepository.save(manga)
 
@@ -400,6 +531,22 @@ public final class SiteCatalogService: SiteCatalogProviding {
         return manga
     }
 
+    /// Attribution links must stay on the site they describe.
+    ///
+    /// Adapter-provided URLs are untrusted: an adapter could point the credit
+    /// link or logo at an arbitrary host.
+    private func sanitizedAttributionURL(_ value: String?, profile: SiteProfile) -> String? {
+        guard let value, let url = URL(string: value), url.scheme?.lowercased() == "https",
+            let host = url.host?.lowercased(),
+            let baseHost = URL(string: profile.baseURL)?.host?.lowercased(),
+            !baseHost.isEmpty,
+            HostMatcher.matches(pattern: baseHost, host: host)
+        else {
+            return nil
+        }
+        return url.absoluteString
+    }
+
     // MARK: - Networking
 
     private func fetchHTML(_ url: URL, session: AdapterSession) async throws -> String {
@@ -415,6 +562,6 @@ public final class SiteCatalogService: SiteCatalogProviding {
 }
 
 private enum SiteSearchSiteOutcome: Sendable {
-    case success([SiteSearchResult])
+    case success(siteProfileID: String, results: [SiteSearchResult], nextPageURL: String?)
     case failure(SiteSearchFailure)
 }
