@@ -16,6 +16,15 @@ public final class SitesViewModel {
     public var lastDetection: ThemeDetectionResult?
     public var lastError: Error?
 
+    /// URL that should be opened in the visible verification browser.
+    public var challengeURL: URL? {
+        guard let error = lastError as? ThemeDetectorError else { return nil }
+        if case .challengeRequired(let url) = error {
+            return url
+        }
+        return nil
+    }
+
     private let siteProfileRepository: any SiteProfileRepository
     private let themeSource: any ThemeSource
     private let themeDetector: (any SiteThemeDetecting)?

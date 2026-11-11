@@ -551,7 +551,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     private func fetchHTML(_ url: URL, session: AdapterSession) async throws -> String {
         let response = try await session.bridge.request(HttpRequest(url: url.absoluteString))
-        if response.status == 403 || response.status == 503 {
+        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
             throw SiteBrowsingError.challengeRequired(url)
         }
         guard (200...299).contains(response.status) else {

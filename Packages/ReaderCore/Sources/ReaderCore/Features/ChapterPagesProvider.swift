@@ -87,7 +87,7 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
             throw SiteBrowsingError.invalidSiteURL(chapterKey)
         }
         let response = try await session.bridge.request(HttpRequest(url: chapterURL.absoluteString))
-        if response.status == 403 || response.status == 503 {
+        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
             throw SiteBrowsingError.challengeRequired(chapterURL)
         }
         guard (200...299).contains(response.status) else {

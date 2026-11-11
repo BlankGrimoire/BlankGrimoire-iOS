@@ -11,6 +11,7 @@ public enum ThemeDetectorError: Error, LocalizedError, Sendable, Equatable {
     case invalidHTML(String)
     case fetchFailed(String)
     case probeFailed(String)
+    case challengeRequired(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -26,6 +27,8 @@ public enum ThemeDetectorError: Error, LocalizedError, Sendable, Equatable {
             return "Failed to fetch probe page: \(msg)"
         case .probeFailed(let msg):
             return "Probe failed: \(msg)"
+        case .challengeRequired(let url):
+            return "The site requires a verification before continuing: \(url.absoluteString)"
         }
     }
 }
@@ -158,6 +161,11 @@ public actor ThemeDetector {
         let request = HttpRequest(url: url, method: "GET")
         let response = try await requestHandler.perform(request)
 
+        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body),
+            let url = URL(string: url)
+        {
+            throw ThemeDetectorError.challengeRequired(url)
+        }
         guard response.status >= 200 && response.status < 300 else {
             throw ThemeDetectorError.fetchFailed("HTTP \(response.status)")
         }

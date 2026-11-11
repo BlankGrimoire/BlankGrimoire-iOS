@@ -174,6 +174,7 @@
 
         @State private var url: String = ""
         @State private var name: String = ""
+        @State private var challengeRoute: ChallengeRoute?
 
         var body: some View {
             NavigationStack {
@@ -255,6 +256,27 @@
                 }
                 .navigationTitle("Add Site")
                 .navigationBarTitleDisplayMode(.inline)
+                .onChange(of: viewModel.challengeURL) { _, challengeURL in
+                    guard let challengeURL,
+                        let host = challengeURL.host?.lowercased()
+                    else {
+                        return
+                    }
+                    challengeRoute = ChallengeRoute(url: challengeURL, allowedHosts: [host])
+                }
+                .sheet(item: $challengeRoute) { route in
+                    ChallengeView(
+                        url: route.url,
+                        allowedHosts: route.allowedHosts
+                    ) { outcome in
+                        challengeRoute = nil
+                        if outcome == .completed {
+                            Task {
+                                await viewModel.detectTheme(for: url)
+                            }
+                        }
+                    }
+                }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
@@ -262,6 +284,7 @@
                             dismiss()
                         }
                     }
+
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
                             Task {
@@ -282,6 +305,17 @@
                         )
                     }
                 }
+            }
+        }
+
+        private struct ChallengeRoute: Identifiable {
+            let id = UUID()
+            let url: URL
+            let allowedHosts: Set<String>
+
+            init(url: URL, allowedHosts: [String]) {
+                self.url = url
+                self.allowedHosts = Set(allowedHosts.map { $0.lowercased() })
             }
         }
     }
