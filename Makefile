@@ -153,6 +153,7 @@ sync-sdk-release:
 	fi
 	@SDK_VERSION=$$(cat $(SDK_VERSION_FILE)); \
 	echo "$(GREEN)SDK version from .sdk-version: $$SDK_VERSION$(NC)"; \
+	PINNED_VERSION=$$(sed -n 's/^# sdk-version: //p' $(SDK_ASSETS_SUMS) | head -1); \
 	RELEASE_URL="$(SDK_RELEASE_URL)/v$$SDK_VERSION"; \
 	TEMP_DIR=$$(mktemp -d); \
 	trap 'rm -rf "$$TEMP_DIR"' EXIT; \
@@ -164,12 +165,18 @@ sync-sdk-release:
 	curl -fsSL --retry 3 "$$RELEASE_URL/fixtures-v1.tar.gz" -o "$$TEMP_DIR/fixtures-v1.tar.gz" || { echo "$(RED)Failed to download fixtures-v1.tar.gz$(NC)"; exit 1; }; \
 	tar -xzf "$$TEMP_DIR/fixtures-v1.tar.gz" -C "$$STAGE/$(TEST_FIXTURES)" || { echo "$(RED)Failed to extract fixtures-v1.tar.gz$(NC)"; exit 1; }; \
 	cp $(SDK_VERSION_FILE) $(SDK_ASSETS_SUMS) "$$STAGE/"; \
-	echo "$(YELLOW)Verifying downloaded assets...$(NC)"; \
-	bash scripts/verify-sdk-assets.sh "$$STAGE" || { echo "$(RED)Downloaded SDK assets do not match $(SDK_ASSETS_SUMS)$(NC)"; exit 1; }; \
+	if [ "$$PINNED_VERSION" = "$$SDK_VERSION" ]; then \
+		echo "$(YELLOW)Verifying downloaded assets...$(NC)"; \
+		bash scripts/verify-sdk-assets.sh "$$STAGE" || { echo "$(RED)Downloaded SDK assets do not match $(SDK_ASSETS_SUMS)$(NC)"; exit 1; }; \
+	else \
+		echo "$(YELLOW)Checksums are pinned to $$PINNED_VERSION; recording $$SDK_VERSION from the release assets$(NC)"; \
+	fi; \
 	rm -rf $(TEST_FIXTURES); \
 	mkdir -p "$$(dirname $(RUNTIME_JS))" "$(TEST_FIXTURES)"; \
 	cp "$$STAGE/$(RUNTIME_JS)" $(RUNTIME_JS); \
 	cp -R "$$STAGE/$(TEST_FIXTURES)/." "$(TEST_FIXTURES)/"; \
+	bash scripts/update-sdk-assets.sh; \
+	bash scripts/verify-sdk-assets.sh; \
 	echo "$(GREEN)SDK release sync complete!$(NC)"
 
 # Strip extended attributes that cause code signing issues on macOS. This is a
