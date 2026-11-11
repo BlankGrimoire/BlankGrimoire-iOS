@@ -1,4 +1,4 @@
-# sdk-version: 1.0.1
+# sdk-version: 1.1.0
 bdf68122cca683c70090aa2157ebc5d56cedba69b550a46325f1039336fa1bd4  Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources/runtime.js
 4ee0530b475412bad690188a9293a1024ce9275f260c7e85d39e23efe9483f5e  Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures/v1/attribution.json
 e907429cfaa9ec7311efc9b78b16ebc06b4895ee3be0b8911c93dc0069fdeb7b  Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures/v1/chapter.json
