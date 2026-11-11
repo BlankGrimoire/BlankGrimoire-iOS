@@ -29,7 +29,7 @@ public final class DefaultSiteThemeDetector: SiteThemeDetecting {
             let baseURL = SiteURL.baseURLString(from: url),
             let host = SiteURL.host(from: url)
         else {
-            throw ThemeDetectorError.invalidHTML("Invalid URL: \(url)")
+            throw ThemeDetectorError.invalidURL(url)
         }
 
         let policy = SiteNetworkPolicy(

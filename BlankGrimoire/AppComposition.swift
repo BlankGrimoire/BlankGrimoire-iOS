@@ -10,16 +10,7 @@ import SwiftData
 @MainActor
 enum AppComposition {
     static func makeModelContainer(isStoredInMemoryOnly: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: BlankGrimoireSchemaV1.self)
-        let configuration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: isStoredInMemoryOnly
-        )
-        return try ModelContainer(
-            for: schema,
-            migrationPlan: BlankGrimoireMigrationPlan.self,
-            configurations: [configuration]
-        )
+        try BlankGrimoireSchema.makeContainer(isStoredInMemoryOnly: isStoredInMemoryOnly)
     }
 
     static func makeDependencies(container: ModelContainer) throws -> FeaturesDependencies {
@@ -32,13 +23,11 @@ enum AppComposition {
         // Those rows can never match a request and are removed once.
         try adapterStore.purgeInvalidTrustedRepositories()
 
-        // Remote theme repository (GitHub Pages)
-        let themeRepositoryURL = "https://blankgrimoire.github.io/BlankGrimoire-themes/index.json"
+        // Remote theme repository. The URL comes from Info.plist so a build
+        // can point at another signed repository without code changes.
+        let themeRepositoryURL = AppConfiguration.themesRepositoryURL()
         let themeRequestHandler = PluginRequestHandler(
-            policy: SiteNetworkPolicy(
-                baseURL: "https://blankgrimoire.github.io",
-                allowedHosts: ["blankgrimoire.github.io"]
-            )
+            policy: AppConfiguration.themesRepositoryPolicy(for: themeRepositoryURL)
         )
         let remoteThemeSource = RemoteThemeSource(
             repositoryURL: themeRepositoryURL,

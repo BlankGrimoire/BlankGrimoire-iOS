@@ -66,6 +66,13 @@ schemes:
     test:
       targets:
         - BlankGrimoireTests
+      environmentVariables:
+        # Empty by default; pass BLANKGRIMMOIRE_E2E=1 as a build setting to
+        # enable the local end-to-end test.
+        BLANKGRIMMOIRE_E2E: $(BLANKGRIMMOIRE_E2E)
+        BLANKGRIMMOIRE_E2E_REPOSITORY_URL: $(BLANKGRIMMOIRE_E2E_REPOSITORY_URL)
+        BLANKGRIMMOIRE_E2E_SITE_A: $(BLANKGRIMMOIRE_E2E_SITE_A)
+        BLANKGRIMMOIRE_E2E_SITE_B: $(BLANKGRIMMOIRE_E2E_SITE_B)
     run:
       config: Debug
     analyze:

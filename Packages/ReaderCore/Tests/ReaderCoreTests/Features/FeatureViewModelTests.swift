@@ -15,7 +15,7 @@ final class LibraryViewModelTests: XCTestCase {
         await viewModel.loadManga()
 
         viewModel.searchText = "ipsum"
-        XCTAssertEqual(viewModel.filteredManga.map(\.id), ["1", "2"])
+        XCTAssertEqual(viewModel.filteredManga.map(\.id), ["2", "1"])
 
         viewModel.searchText = "fantasy"
         XCTAssertEqual(viewModel.filteredManga.map(\.id), ["1"])
@@ -59,6 +59,52 @@ final class LibraryViewModelTests: XCTestCase {
 
         viewModel.sortOption = .titleDescending
         XCTAssertEqual(viewModel.filteredManga.map(\.title), ["Zulu", "Alpha"])
+    }
+
+    func testUnreadOrderIsStableByTitleAndID() async {
+        let repository = TestMangaRepository(manga: [
+            makeManga(id: "3", title: "Charlie"),
+            makeManga(id: "1", title: "Alpha"),
+            makeManga(id: "2", title: "Bravo"),
+        ])
+        let viewModel = LibraryViewModel(mangaRepository: repository)
+        await viewModel.loadManga()
+
+        XCTAssertEqual(viewModel.filteredManga.map(\.id), ["1", "2", "3"])
+    }
+
+    func testSearchTextIsTrimmed() async {
+        let repository = TestMangaRepository(manga: [makeManga(id: "1", title: "Alpha")])
+        let viewModel = LibraryViewModel(mangaRepository: repository)
+        await viewModel.loadManga()
+
+        viewModel.searchText = "   "
+        XCTAssertEqual(viewModel.filteredManga.map(\.id), ["1"])
+    }
+
+    func testDeletingMangaRemovesItFromTheVisibleList() async {
+        let manga = makeManga(id: "1", title: "Alpha")
+        let repository = TestMangaRepository(manga: [manga])
+        let viewModel = LibraryViewModel(mangaRepository: repository)
+        await viewModel.loadManga()
+
+        await viewModel.deleteManga(LibraryEntry(entity: manga))
+
+        XCTAssertTrue(viewModel.filteredManga.isEmpty)
+        XCTAssertTrue(repository.manga.isEmpty)
+    }
+
+    func testTogglingFavoriteUpdatesTheSnapshotAndTheStore() async throws {
+        let manga = makeManga(id: "1", title: "Alpha")
+        let repository = TestMangaRepository(manga: [manga])
+        let viewModel = LibraryViewModel(mangaRepository: repository)
+        await viewModel.loadManga()
+
+        let entry = try XCTUnwrap(viewModel.filteredManga.first)
+        await viewModel.toggleFavorite(entry)
+
+        XCTAssertEqual(viewModel.filteredManga.first?.isFavorite, true)
+        XCTAssertEqual(repository.manga.first?.isFavorite, true)
     }
 
     private func makeManga(
@@ -207,6 +253,87 @@ final class SitesViewModelTests: XCTestCase {
         XCTAssertEqual(repository.profiles.first?.themeID, "theme.example")
         XCTAssertEqual(repository.profiles.first?.themeVersion, "1.0.0")
     }
+
+    func testSwitchingBackToTheOriginalThemeIsPersisted() async {
+        let profile = SiteProfile(
+            name: "Example Site",
+            baseURL: "https://example.org",
+            themeID: "theme.old",
+            themeVersion: "1.0.0"
+        )
+        let repository = TestSiteProfileRepository(profiles: [profile])
+        let viewModel = SitesViewModel(
+            siteProfileRepository: repository,
+            themeSource: TestThemeSource(),
+            themeDetector: TestThemeDetector()
+        )
+        await viewModel.loadProfiles()
+
+        await viewModel.setTheme("theme.example", for: profile)
+        // The view still holds the original snapshot; switching back must not
+        // be treated as a no-op.
+        await viewModel.setTheme("theme.old", for: profile)
+
+        XCTAssertEqual(repository.profiles.first?.themeID, "theme.old")
+    }
+
+    func testChangingThemeInvalidatesCachedPages() async {
+        let profile = SiteProfile(
+            name: "Example Site",
+            baseURL: "https://example.org",
+            themeID: "theme.old"
+        )
+        let manga = MangaEntity(
+            id: "m-1",
+            title: "Series",
+            siteProfileID: profile.id
+        )
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 1)
+        chapter.manga = manga
+        let pages = RecordingPageRepository()
+        let chapters = RecordingChapterRepository(chapters: [chapter])
+        let viewModel = SitesViewModel(
+            siteProfileRepository: TestSiteProfileRepository(profiles: [profile]),
+            themeSource: TestThemeSource(),
+            themeDetector: TestThemeDetector(),
+            mangaRepository: TestMangaRepository(manga: [manga]),
+            chapterRepository: chapters,
+            pageRepository: pages
+        )
+        await viewModel.loadProfiles()
+
+        await viewModel.setTheme("theme.example", for: profile)
+
+        XCTAssertEqual(pages.deletedChapterIDs, ["c-1"])
+        XCTAssertEqual(chapters.downloadStatusUpdates.map(\.chapterID), ["c-1"])
+        XCTAssertEqual(chapters.downloadStatusUpdates.map(\.isDownloaded), [false])
+    }
+
+    func testChangingToTheSameThemeKeepsCachedPages() async {
+        let profile = SiteProfile(
+            name: "Example Site",
+            baseURL: "https://example.org",
+            themeID: "theme.example",
+            themeVersion: "1.0.0"
+        )
+        let manga = MangaEntity(id: "m-1", title: "Series", siteProfileID: profile.id)
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 1)
+        chapter.manga = manga
+        let pages = RecordingPageRepository()
+        let viewModel = SitesViewModel(
+            siteProfileRepository: TestSiteProfileRepository(profiles: [profile]),
+            themeSource: TestThemeSource(),
+            themeDetector: TestThemeDetector(),
+            mangaRepository: TestMangaRepository(manga: [manga]),
+            chapterRepository: RecordingChapterRepository(chapters: [chapter]),
+            pageRepository: pages
+        )
+        await viewModel.loadProfiles()
+
+        await viewModel.setTheme("theme.example", for: profile)
+
+        XCTAssertTrue(pages.deletedChapterIDs.isEmpty)
+    }
 }
 
 // MARK: - Test Doubles
@@ -280,7 +407,19 @@ private struct TestThemeSource: ThemeSource {
                     chapters: .init(item: ".chapter", link: "a", order: "desc"),
                     pages: .init(strategies: [])
                 )
-            )
+            ),
+            ThemeAdapter(
+                id: "theme.old",
+                name: "Old Theme",
+                version: "1.0.0",
+                detectionSignature: ThemeSignature(minScore: 1),
+                selectors: ThemeSelectors(
+                    search: .init(path: "/search", item: ".item", title: ".title", link: "a"),
+                    details: .init(title: ".title"),
+                    chapters: .init(item: ".chapter", link: "a", order: "desc"),
+                    pages: .init(strategies: [])
+                )
+            ),
         ]
     }
     func getTheme(id: String) async throws -> ThemeAdapter? { nil }
@@ -305,5 +444,52 @@ private struct TestThemeDetector: SiteThemeDetecting {
             score: 10,
             matchedSignals: ["test"]
         )
+    }
+}
+
+@MainActor
+private final class RecordingPageRepository: PageRepository {
+    private(set) var deletedChapterIDs: [String] = []
+
+    func fetchByChapterId(_ chapterId: String) async throws -> [PageEntity] { [] }
+    func fetchById(_ id: String) async throws -> PageEntity? { nil }
+    func fetchByChapterIdAndIndex(_ chapterId: String, index: Int) async throws -> PageEntity? { nil }
+    func save(_ page: PageEntity) async throws {}
+    func saveAll(_ pages: [PageEntity]) async throws {}
+    func delete(_ page: PageEntity) async throws {}
+    func deleteAll(for chapterId: String) async throws {
+        deletedChapterIDs.append(chapterId)
+    }
+    func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
+}
+
+@MainActor
+private final class RecordingChapterRepository: ChapterRepository {
+    private var chapters: [ChapterEntity]
+    private(set) var downloadStatusUpdates: [(chapterID: String, isDownloaded: Bool)] = []
+
+    init(chapters: [ChapterEntity]) {
+        self.chapters = chapters
+    }
+
+    func fetchByMangaId(_ mangaId: String) async throws -> [ChapterEntity] { chapters }
+    func fetchById(_ id: String) async throws -> ChapterEntity? { chapters.first { $0.id == id } }
+    func fetchByMangaIdAndNumber(_ mangaId: String, number: Double) async throws -> ChapterEntity? { nil }
+    func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] { chapters.filter { ids.contains($0.id) } }
+    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] { [] }
+    func save(_ chapter: ChapterEntity) async throws {
+        if let index = chapters.firstIndex(where: { $0.id == chapter.id }) {
+            chapters[index] = chapter
+        } else {
+            chapters.append(chapter)
+        }
+    }
+    func saveAll(_ chapters: [ChapterEntity]) async throws { self.chapters = chapters }
+    func delete(_ chapter: ChapterEntity) async throws {
+        chapters.removeAll { $0.id == chapter.id }
+    }
+    func deleteAll(for mangaId: String) async throws { chapters.removeAll() }
+    func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {
+        downloadStatusUpdates.append((chapterId, isDownloaded))
     }
 }

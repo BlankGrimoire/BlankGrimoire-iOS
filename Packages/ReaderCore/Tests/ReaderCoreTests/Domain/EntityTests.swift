@@ -128,6 +128,34 @@ final class DomainEntityTests: XCTestCase {
         XCTAssertEqual(manga.readingProgress, 6.0 / 20.0, accuracy: 0.001)
     }
 
+    func testReadingProgressIsSeriesLevel() throws {
+        let manga = MangaEntity(
+            id: "manga-1",
+            title: "Series",
+            status: .ongoing,
+            contentRating: .safe
+        )
+        let first = ChapterEntity(id: "c-1", number: 1, pageCount: 10)
+        let second = ChapterEntity(id: "c-2", number: 2, pageCount: 10)
+        let third = ChapterEntity(id: "c-3", number: 3, pageCount: 10)
+        first.manga = manga
+        second.manga = manga
+        third.manga = manga
+        manga.chapters = [third, first, second]
+
+        // Half of the second chapter of three: (1 + 0.5) / 3.
+        manga.updateReadingPosition(chapterId: "c-2", pageIndex: 4, totalPages: 10)
+        XCTAssertEqual(manga.readingProgress, 0.5, accuracy: 0.0001)
+
+        // Opening the first chapter starts at the beginning of the series.
+        manga.updateReadingPosition(chapterId: "c-1", pageIndex: 0, totalPages: 10)
+        XCTAssertEqual(manga.readingProgress, 0.1 / 3.0, accuracy: 0.0001)
+
+        // The last page of the last chapter completes the series.
+        manga.updateReadingPosition(chapterId: "c-3", pageIndex: 9, totalPages: 10)
+        XCTAssertEqual(manga.readingProgress, 1.0, accuracy: 0.0001)
+    }
+
     // MARK: - Chapter Tests
 
     func testChapterCreation() throws {

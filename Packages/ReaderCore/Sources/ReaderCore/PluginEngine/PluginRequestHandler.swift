@@ -300,15 +300,40 @@ public actor PluginRequestHandler {
         return url.path.hasPrefix(path)
     }
 
-    /// Decodes the body using the declared charset, falling back to UTF-8.
+    /// Decodes the body using the declared charset, falling back to UTF-8 and
+    /// then Latin-1. Media served as Shift-JIS or Windows-1252 must not decode
+    /// to an empty string.
     private func decodedBody(_ data: Data, response: HTTPURLResponse) -> String {
-        if let encodingName = response.textEncodingName,
-            let encoding = String.Encoding(charSetName: encodingName),
+        if let charset = Self.charset(from: response),
+            let encoding = String.Encoding(charSetName: charset),
             let body = String(data: data, encoding: encoding)
         {
             return body
         }
+        if let body = String(data: data, encoding: .utf8) {
+            return body
+        }
+        if let body = String(data: data, encoding: .isoLatin1) {
+            return body
+        }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Reads the charset from `textEncodingName` or the Content-Type header.
+    private static func charset(from response: HTTPURLResponse) -> String? {
+        if let name = response.textEncodingName, !name.isEmpty {
+            return name
+        }
+        guard let contentType = response.value(forHTTPHeaderField: "Content-Type") else {
+            return nil
+        }
+        for part in contentType.split(separator: ";") {
+            let token = part.trimmingCharacters(in: .whitespaces)
+            guard token.lowercased().hasPrefix("charset=") else { continue }
+            return String(token.dropFirst("charset=".count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        }
+        return nil
     }
 
     /// Hides query strings, which may contain tokens, from diagnostics.
@@ -349,8 +374,8 @@ public actor PluginRequestHandler {
             newRequest.httpMethod = request.httpMethod
             newRequest.allHTTPHeaderFields = request.allHTTPHeaderFields
 
-            // 301/302/303 turn a non-GET request into GET, matching browsers
-            // and `NativeBridgeImpl`. 307/308 preserve method and body.
+            // 301/302/303 turn a non-GET request into GET, matching browsers.
+            // 307/308 preserve method and body.
             let status = httpResponse.statusCode
             let downgradesToGET = status == 301 || status == 302 || status == 303
             if downgradesToGET, request.httpMethod != "GET", request.httpMethod != "HEAD" {

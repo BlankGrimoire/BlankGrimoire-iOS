@@ -16,6 +16,7 @@ public enum PluginEngineError: Error, LocalizedError, Sendable, Equatable {
     case decodingFailed(String)
     case requestNotConfigured
     case disposed
+    case documentTooLarge(limit: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -43,6 +44,8 @@ public enum PluginEngineError: Error, LocalizedError, Sendable, Equatable {
             return "Native request handler is not configured"
         case .disposed:
             return "The JavaScript plugin runtime has been disposed"
+        case .documentTooLarge(let limit):
+            return "The parsed HTML document exceeds the \(limit)-byte limit"
         }
     }
 }

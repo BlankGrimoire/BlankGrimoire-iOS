@@ -9,6 +9,8 @@ import SwiftData
 public enum PersistenceError: Error, LocalizedError, Sendable {
     case transactionAlreadyInProgress
     case nestedTransaction
+    case recordNotFound(entity: String, id: String)
+    case invalidLocalPath(String)
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +18,10 @@ public enum PersistenceError: Error, LocalizedError, Sendable {
             return "A persistence transaction is already in progress"
         case .nestedTransaction:
             return "Nested persistence transactions are not supported"
+        case .recordNotFound(let entity, let id):
+            return "No \(entity) found for id \(id)"
+        case .invalidLocalPath(let path):
+            return "Refusing to use a file outside the app container: \(path)"
         }
     }
 }
@@ -26,10 +32,16 @@ public enum PersistenceError: Error, LocalizedError, Sendable {
 @MainActor
 final class PersistenceCoordinator {
     let context: ModelContext
+    /// The container backing ``context``.
+    ///
+    /// Background readers (for example `LibraryIndexReader`) create their own
+    /// `ModelContext` from it instead of touching the main-actor context.
+    let container: ModelContainer
 
     private var isInTransaction = false
 
     init(container: ModelContainer) {
+        self.container = container
         self.context = container.mainContext
     }
 
@@ -130,21 +142,10 @@ public final class SwiftDataPersistenceManager: PersistenceManager {
     extension SwiftDataPersistenceManager {
         /// Creates an in-memory persistence manager for testing
         static func createInMemory() throws -> SwiftDataPersistenceManager {
-            let schema = Schema([
-                MangaEntity.self,
-                ChapterEntity.self,
-                PageEntity.self,
-                ReadingProgressEntity.self,
-                BookmarkEntity.self,
-                SiteProfileEntity.self,
-            ])
-
-            let configuration = ModelConfiguration(
-                "Test",
-                isStoredInMemoryOnly: true
+            let container = try BlankGrimoireSchema.makeContainer(
+                isStoredInMemoryOnly: true,
+                name: "Test"
             )
-
-            let container = try ModelContainer(for: schema, configurations: [configuration])
             return try SwiftDataPersistenceManager(container: container)
         }
     }

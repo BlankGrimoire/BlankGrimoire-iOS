@@ -60,6 +60,55 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(manga.readingProgress, 1.0, accuracy: 0.001)
     }
 
+    func testOpeningChapterWithoutNavigatingDoesNotPersistProgress() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progressRepository = TestReadingProgressRepository()
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: [
+                PageEntity(index: 0, imageURL: "https://example.org/one.jpg"),
+                PageEntity(index: 1, imageURL: "https://example.org/two.jpg"),
+            ]),
+            readingProgressRepository: progressRepository,
+            mangaRepository: TestMangaRepository(manga: manga)
+        )
+
+        await viewModel.load()
+        await viewModel.flushProgress()
+
+        XCTAssertTrue(progressRepository.progress.isEmpty)
+        XCTAssertNil(manga.lastReadChapterId)
+        XCTAssertEqual(manga.readingProgress, 0, accuracy: 0.0001)
+    }
+
+    func testSavingFlagStaysSetWhileAWriteIsInFlight() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 2)
+        let progressRepository = TestReadingProgressRepository()
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: [
+                PageEntity(index: 0, imageURL: "https://example.org/one.jpg"),
+                PageEntity(index: 1, imageURL: "https://example.org/two.jpg"),
+            ]),
+            readingProgressRepository: progressRepository,
+            mangaRepository: TestMangaRepository(manga: manga)
+        )
+        await viewModel.load()
+        await viewModel.setPage(index: 1)
+
+        var flagsDuringWrite: [Bool] = []
+        progressRepository.willSave = { flagsDuringWrite.append(viewModel.isSavingProgress) }
+
+        await viewModel.flushProgress()
+
+        XCTAssertEqual(flagsDuringWrite, [true])
+        XCTAssertFalse(viewModel.isSavingProgress)
+    }
+
     func testLoadFallsBackToChapterPagesProviderWhenCacheIsEmpty() async {
         let manga = MangaEntity(id: "manga", title: "Lorem")
         let chapter = ChapterEntity(id: "chapter", pageCount: 0)
@@ -90,7 +139,11 @@ private final class TestChapterPagesProvider: ChapterPagesProviding {
         self.pages = pages
     }
 
-    func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity] {
+    func pages(
+        for chapter: ChapterEntity,
+        manga: MangaEntity,
+        forceRefresh: Bool
+    ) async throws -> [PageEntity] {
         pages
     }
 }
@@ -118,6 +171,7 @@ private final class TestPageRepository: PageRepository {
 @MainActor
 private final class TestReadingProgressRepository: ReadingProgressRepository {
     var progress: [ReadingProgressEntity]
+    var willSave: (@MainActor () -> Void)?
 
     init(progress: [ReadingProgressEntity] = []) {
         self.progress = progress
@@ -136,6 +190,7 @@ private final class TestReadingProgressRepository: ReadingProgressRepository {
     }
 
     func save(_ progress: ReadingProgressEntity) async throws {
+        willSave?()
         if let index = self.progress.firstIndex(where: { $0.id == progress.id }) {
             self.progress[index] = progress
         } else {

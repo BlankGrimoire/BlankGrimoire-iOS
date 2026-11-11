@@ -33,6 +33,8 @@
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationPortraitUpsideDown</string>
     </array>
+    <key>BlankGrimoireThemesRepositoryURL</key>
+    <string>https://blankgrimoire.github.io/BlankGrimoire-themes/index.json</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

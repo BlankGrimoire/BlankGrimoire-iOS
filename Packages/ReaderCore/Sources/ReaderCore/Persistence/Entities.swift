@@ -25,7 +25,14 @@ public final class MangaEntity {
     public var updatedAt: Date
     public var isFavorite: Bool
 
-    // Source attribution
+    // Source attribution.
+    //
+    // The link to a site profile is the value of `siteProfileID`, not a
+    // SwiftData relationship: profiles are value types and the same store is
+    // shared with adapters that only understand identifiers. Deleting a
+    // profile therefore purges its library content explicitly in
+    // `SitesViewModel.deleteProfile` (see DOM-04), which also removes the
+    // media files that SwiftData could not cascade.
     public var siteProfileID: String?
     public var siteName: String?
     public var siteURL: String?
@@ -105,23 +112,51 @@ public final class MangaEntity {
         return String(id.dropFirst(prefix.count))
     }
 
+    /// Chapters in reading order.
+    ///
+    /// Numeric order first; chapters without a number go last. The identifier
+    /// breaks ties so the order is stable across fetches.
+    public var chaptersInReadingOrder: [ChapterEntity] {
+        chapters.sorted { lhs, rhs in
+            let left = lhs.number ?? .greatestFiniteMagnitude
+            let right = rhs.number ?? .greatestFiniteMagnitude
+            if left != right {
+                return left < right
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
     public func updateLastRead(chapterId: String, pageIndex: Int, totalPages: Int) {
         updateReadingPosition(chapterId: chapterId, pageIndex: pageIndex, totalPages: totalPages)
     }
 
-    /// Updates the exact reading position, treating the last page as completed.
+    /// Updates the exact reading position.
     ///
-    /// `pageIndex` is zero-based. The computed progress reaches `1.0` when the
-    /// reader persists the final page, so the library does not show a series as
-    /// still in progress after its last page.
+    /// `pageIndex` is zero-based. The stored `readingProgress` is series-level:
+    /// completed chapters count as whole units and the current chapter adds
+    /// its own fraction. Reading the final page of the final chapter reaches
+    /// `1.0`, while opening a chapter starts at that chapter's position in the
+    /// series instead of showing the chapter as a fraction of the whole series.
     public func updateReadingPosition(chapterId: String, pageIndex: Int, totalPages: Int) {
         self.lastReadAt = Date()
         self.lastReadChapterId = chapterId
         self.lastReadPageIndex = pageIndex
+
+        let chapterFraction: Double
         if totalPages > 0 {
-            self.readingProgress = Double(min(pageIndex + 1, totalPages)) / Double(totalPages)
+            chapterFraction = Double(min(pageIndex + 1, totalPages)) / Double(totalPages)
         } else {
-            self.readingProgress = 0.0
+            chapterFraction = 0
+        }
+
+        let ordered = chaptersInReadingOrder
+        if !ordered.isEmpty,
+            let index = ordered.firstIndex(where: { $0.id == chapterId })
+        {
+            self.readingProgress = (Double(index) + chapterFraction) / Double(ordered.count)
+        } else {
+            self.readingProgress = chapterFraction
         }
         self.updatedAt = Date()
     }
@@ -154,8 +189,9 @@ public final class ChapterEntity {
     // Relationships
     @Relationship(deleteRule: .nullify) public var manga: MangaEntity?
     @Relationship(deleteRule: .cascade, inverse: \PageEntity.chapter) public var pages: [PageEntity] = []
-    @Relationship(deleteRule: .nullify) public var readingProgressEntries: [ReadingProgressEntity] = []
-    @Relationship(deleteRule: .nullify) public var bookmarks: [BookmarkEntity] = []
+    @Relationship(deleteRule: .nullify, inverse: \ReadingProgressEntity.chapter) public var readingProgressEntries:
+        [ReadingProgressEntity] = []
+    @Relationship(deleteRule: .nullify, inverse: \BookmarkEntity.chapter) public var bookmarks: [BookmarkEntity] = []
 
     public init(
         id: String,

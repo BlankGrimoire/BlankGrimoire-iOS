@@ -4,6 +4,14 @@
     import SwiftUI
     import WebKit
 
+    /// How the verification browser was closed.
+    public enum ChallengeOutcome: Sendable, Equatable {
+        /// The user pressed Done after completing the challenge.
+        case completed
+        /// The user pressed Cancel, swiped the sheet away, or the browser failed.
+        case cancelled
+    }
+
     /// A visible browser surface where the user can complete a site challenge.
     ///
     /// The browser is never hidden and never automates the challenge: the user
@@ -12,11 +20,11 @@
     public struct ChallengeView: View {
         private let url: URL
         private let allowedHosts: Set<String>
-        private let onComplete: () -> Void
-        private let onCancel: () -> Void
+        private let onFinish: (ChallengeOutcome) -> Void
         @Environment(\.dismiss) private var dismiss
         @State private var isLoading = true
         @State private var errorMessage: String?
+        @State private var didReportOutcome = false
 
         /// Creates a verification browser.
         ///
@@ -26,14 +34,12 @@
         public init(
             url: URL,
             allowedHosts: Set<String>,
-            onComplete: @escaping () -> Void = {},
-            onCancel: @escaping () -> Void = {}
+            onFinish: @escaping (ChallengeOutcome) -> Void = { _ in }
         ) {
             precondition(!allowedHosts.isEmpty, "ChallengeView requires at least one allowed host")
             self.url = url
             self.allowedHosts = Set(allowedHosts.map { $0.lowercased() })
-            self.onComplete = onComplete
-            self.onCancel = onCancel
+            self.onFinish = onFinish
         }
 
         public var body: some View {
@@ -56,14 +62,12 @@
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
-                            onCancel()
-                            dismiss()
+                            finish(.cancelled)
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") {
-                            onComplete()
-                            dismiss()
+                            finish(.completed)
                         }
                         .disabled(isLoading)
                     }
@@ -80,6 +84,24 @@
                     Text(errorMessage ?? "")
                 }
             }
+            // A swipe-to-dismiss never goes through the toolbar buttons, so the
+            // caller still learns that the verification was not completed.
+            .onDisappear {
+                if !didReportOutcome {
+                    didReportOutcome = true
+                    onFinish(.cancelled)
+                }
+            }
+        }
+
+        private func finish(_ outcome: ChallengeOutcome) {
+            guard !didReportOutcome else {
+                dismiss()
+                return
+            }
+            didReportOutcome = true
+            onFinish(outcome)
+            dismiss()
         }
     }
 
@@ -102,7 +124,15 @@
         }
 
         func updateUIView(_ webView: WKWebView, context: Context) {
+            let previousURL = context.coordinator.parent.url
             context.coordinator.parent = self
+            // The challenge URL only changes when the caller presents a new
+            // verification route; reload so the coordinator and the web view
+            // do not keep using stale values.
+            if previousURL != url {
+                isLoading = true
+                webView.load(URLRequest(url: url))
+            }
         }
 
         static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
@@ -200,6 +230,11 @@
 
             func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
                 handle(error)
+            }
+
+            func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+                parent.isLoading = false
+                parent.errorMessage = "The verification page stopped unexpectedly. Close and try again."
             }
 
             private func handle(_ error: Error) {

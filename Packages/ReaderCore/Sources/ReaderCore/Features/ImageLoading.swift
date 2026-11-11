@@ -14,6 +14,8 @@ public protocol ImageLoading: Sendable {
     /// pass `nil`.
     func loadImageData(for url: String, headers: [String: String]?) async throws -> Data
     func clearCache() async
+    /// Warms the cache for images the reader is likely to show next.
+    func prefetch(_ urls: [String], headers: [String: [String: String]]) async
 }
 
 extension ImageLoading {
@@ -21,16 +23,19 @@ extension ImageLoading {
     public func loadImageData(for url: String) async throws -> Data {
         try await loadImageData(for: url, headers: nil)
     }
+
+    /// Prefetching is optional: previews and tests can ignore it.
+    public func prefetch(_ urls: [String], headers: [String: [String: String]]) async {}
 }
 
 /// `ImageLoading` implementation backed by a lazily created `ImagePipeline`.
 ///
 /// The pipeline is created on first use so the App composition root stays
-/// synchronous. It provides the memory/disk cache and request deduplication
-/// implemented in IOS-7.
+/// synchronous. Creation is stored as a single task: concurrent first callers
+/// await the same pipeline instead of each creating one and losing the shared
+/// memory cache and request deduplication.
 public actor PipelineImageLoader: ImageLoading {
-    public static let shared = PipelineImageLoader()
-
+    private var creationTask: Task<ImagePipeline, Error>?
     private var pipeline: ImagePipeline?
     private let configuration: ImagePipelineConfiguration
 
@@ -43,17 +48,44 @@ public actor PipelineImageLoader: ImageLoading {
     }
 
     /// Clears the underlying memory and disk caches.
+    ///
+    /// This creates the pipeline when needed: the disk cache may hold files
+    /// from a previous launch and must be cleared even if no image was loaded
+    /// yet in this session.
     public func clearCache() async {
-        guard let pipeline else { return }
+        guard let pipeline = try? await resolvedPipeline() else { return }
         await pipeline.clearCache()
+    }
+
+    public func prefetch(_ urls: [String], headers: [String: [String: String]]) async {
+        guard let pipeline = try? await resolvedPipeline(), !urls.isEmpty else { return }
+        _ = await pipeline.prefetch(urls, headers: headers, priority: .background)
     }
 
     private func resolvedPipeline() async throws -> ImagePipeline {
         if let pipeline {
             return pipeline
         }
-        let created = try await ImagePipeline.create(configuration: configuration)
-        pipeline = created
-        return created
+
+        let task: Task<ImagePipeline, Error>
+        if let creationTask {
+            task = creationTask
+        } else {
+            let configuration = self.configuration
+            task = Task.detached(priority: .userInitiated) {
+                try await ImagePipeline.create(configuration: configuration)
+            }
+            creationTask = task
+        }
+
+        do {
+            let created = try await task.value
+            pipeline = created
+            creationTask = nil
+            return created
+        } catch {
+            creationTask = nil
+            throw error
+        }
     }
 }

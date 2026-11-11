@@ -2,6 +2,7 @@
   "id": "theme.example",
   "name": "Example Theme",
   "version": "1.0.0",
+  "apiVersion": 1,
   "detectionSignature": {
     "selectors": [".example-reader"],
     "minScore": 2

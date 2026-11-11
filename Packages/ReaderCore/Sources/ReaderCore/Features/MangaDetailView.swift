@@ -310,7 +310,7 @@
                             .foregroundStyle(.secondary)
                     }
 
-                    if let siteURL = URL(string: attribution.siteURL) {
+                    if let siteURL = SiteURL.normalizedURL(from: attribution.siteURL) {
                         Link(destination: siteURL) {
                             Label("Open on site", systemImage: "safari")
                         }
@@ -348,7 +348,9 @@
                             ChapterRowView(
                                 chapter: chapter,
                                 isDownloaded: chapter.isDownloaded,
-                                progress: chapter.readingProgressEntries.first?.progress ?? 0
+                                progress: chapter.readingProgressEntries.max(by: {
+                                    $0.readAt < $1.readAt
+                                })?.progress ?? 0
                             ) {
                                 readerRoute = ReaderRoute(chapter: chapter)
                             }
@@ -434,8 +436,9 @@
                 ChallengeView(
                     url: route.url,
                     allowedHosts: route.allowedHosts,
-                    onComplete: {
+                    onFinish: { outcome in
                         challengeRoute = nil
+                        guard outcome == .completed else { return }
                         Task { await viewModel.refresh() }
                     }
                 )
@@ -475,6 +478,51 @@
             case .suggestive: return "exclamationmark.triangle.fill"
             case .mature: return "exclamationmark.octagon.fill"
             case .unknown: return "questionmark.circle"
+            }
+        }
+    }
+
+    /// Loads one series by identifier before showing its detail screen.
+    ///
+    /// The library grid keeps only `LibraryEntry` snapshots, so the detail
+    /// screen fetches the live entity it needs for progress and mutations.
+    /// Reading one row by id is cheap; the whole library never leaves the
+    /// background reader (REP-01).
+    public struct MangaDetailLoaderView: View {
+        let mangaID: String
+        let dependencies: FeaturesDependencies
+
+        @State private var manga: MangaEntity?
+        @State private var loadFailed = false
+
+        public init(mangaID: String, dependencies: FeaturesDependencies) {
+            self.mangaID = mangaID
+            self.dependencies = dependencies
+        }
+
+        public var body: some View {
+            Group {
+                if let manga {
+                    MangaDetailView(manga: manga, dependencies: dependencies)
+                } else if loadFailed {
+                    ContentUnavailableView(
+                        "Series unavailable",
+                        systemImage: "book.closed",
+                        description: Text("The series is no longer in your library.")
+                    )
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .task(id: mangaID) {
+                guard manga == nil else { return }
+                do {
+                    manga = try await dependencies.mangaRepository.fetchById(mangaID)
+                    loadFailed = manga == nil
+                } catch {
+                    loadFailed = true
+                }
             }
         }
     }

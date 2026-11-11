@@ -15,20 +15,10 @@ final class RepositoryTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
 
-        let schema = Schema([
-            MangaEntity.self,
-            ChapterEntity.self,
-            PageEntity.self,
-            ReadingProgressEntity.self,
-            BookmarkEntity.self,
-        ])
-
-        let configuration = ModelConfiguration(
-            "Test",
-            isStoredInMemoryOnly: true
+        container = try BlankGrimoireSchema.makeContainer(
+            isStoredInMemoryOnly: true,
+            name: "RepositoryTests"
         )
-
-        container = try ModelContainer(for: schema, configurations: [configuration])
         context = container.mainContext
 
         persistenceManager = try SwiftDataPersistenceManager(container: container)
@@ -241,12 +231,62 @@ final class RepositoryTests: XCTestCase {
         var fetched = try await persistenceManager.pages.fetchById(page.id)
         XCTAssertFalse(fetched!.isDownloaded)
 
+        let localPath = try XCTUnwrap(
+            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        )
+        .appendingPathComponent("pages/1.jpg")
+        .path
+
         try await persistenceManager.pages.updateDownloadStatus(
-            page.id, isDownloaded: true, localPath: "/local/path/1.jpg")
+            page.id, isDownloaded: true, localPath: localPath)
 
         fetched = try await persistenceManager.pages.fetchById(page.id)
         XCTAssertTrue(fetched!.isDownloaded)
-        XCTAssertEqual(fetched?.localPath, "/local/path/1.jpg")
+        XCTAssertEqual(fetched?.localPath, localPath)
+    }
+
+    func testPageDownloadStatusRejectsPathOutsideContainer() async throws {
+        let chapter = ChapterEntity(id: "ch-1", pageCount: 2)
+        let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
+        page.chapter = chapter
+        try await persistenceManager.chapters.save(chapter)
+        try await persistenceManager.pages.save(page)
+
+        do {
+            try await persistenceManager.pages.updateDownloadStatus(
+                page.id, isDownloaded: true, localPath: "/etc/passwd")
+            XCTFail("Expected invalidLocalPath")
+        } catch let error as PersistenceError {
+            guard case .invalidLocalPath(let path) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(path, "/etc/passwd")
+        }
+    }
+
+    func testUpdateDownloadStatusThrowsForMissingRecords() async throws {
+        do {
+            try await persistenceManager.chapters.updateDownloadStatus(
+                "missing", isDownloaded: true, downloadedPagesCount: 0)
+            XCTFail("Expected recordNotFound")
+        } catch let error as PersistenceError {
+            guard case .recordNotFound(let entity, let id) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(entity, "chapter")
+            XCTAssertEqual(id, "missing")
+        }
+
+        do {
+            try await persistenceManager.pages.updateDownloadStatus(
+                "missing", isDownloaded: true, localPath: nil)
+            XCTFail("Expected recordNotFound")
+        } catch let error as PersistenceError {
+            guard case .recordNotFound(let entity, _) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(entity, "page")
+        }
     }
 
     // MARK: - Reading Progress Tests
@@ -349,6 +389,57 @@ final class RepositoryTests: XCTestCase {
         XCTAssertNil(fetched)
     }
 
+    func testReadingProgressUpsertKeepsOneRowPerChapter() async throws {
+        let manga = MangaEntity(id: "m-1", title: "Manga", status: .ongoing, contentRating: .safe)
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 10)
+        chapter.manga = manga
+        manga.chapters = [chapter]
+        try await persistenceManager.mangas.save(manga)
+        try await persistenceManager.chapters.save(chapter)
+
+        let first = ReadingProgressEntity(
+            id: "progress-1", pageIndex: 1, totalPages: 10, manga: manga, chapter: chapter)
+        try await persistenceManager.readingProgress.save(first)
+
+        let second = ReadingProgressEntity(
+            id: "progress-2", pageIndex: 2, totalPages: 10, manga: manga, chapter: chapter)
+        try await persistenceManager.readingProgress.save(second)
+
+        let rows = try await persistenceManager.readingProgress.fetchByMangaIdAndChapterId(
+            "m-1", chapterId: "c-1")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.id, "progress-2")
+    }
+
+    func testOptionalRelationshipPredicatesMatch() async throws {
+        let manga = MangaEntity(id: "m-1", title: "Manga", status: .ongoing, contentRating: .safe)
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 1)
+        let downloaded = ChapterEntity(id: "c-2", number: 2, pageCount: 1)
+        downloaded.isDownloaded = true
+        chapter.manga = manga
+        downloaded.manga = manga
+        manga.chapters = [chapter, downloaded]
+
+        let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
+        page.chapter = chapter
+        chapter.pages = [page]
+
+        try await persistenceManager.mangas.save(manga)
+        try await persistenceManager.chapters.save(chapter)
+        try await persistenceManager.chapters.save(downloaded)
+        try await persistenceManager.pages.save(page)
+
+        let chapters = try await persistenceManager.chapters.fetchByMangaId("m-1")
+        XCTAssertEqual(chapters.map(\.id), ["c-1", "c-2"])
+
+        let downloadedChapters = try await persistenceManager.chapters.fetchDownloadedChapters(
+            for: "m-1")
+        XCTAssertEqual(downloadedChapters.map(\.id), ["c-2"])
+
+        let pages = try await persistenceManager.pages.fetchByChapterId("c-1")
+        XCTAssertEqual(pages.map(\.id), [page.id])
+    }
+
     // MARK: - Count and Batch Tests
 
     func testMangaCount() async throws {
@@ -362,4 +453,145 @@ final class RepositoryTests: XCTestCase {
         let count2 = try await persistenceManager.mangas.count()
         XCTAssertEqual(count2, count1 + 5)
     }
+
+    func testChapterLookupByNumberUsesTolerance() async throws {
+        let manga = MangaEntity(id: "m-1", title: "Manga", status: .ongoing, contentRating: .safe)
+        let chapter = ChapterEntity(id: "c-1", number: 1.1, pageCount: 10)
+        chapter.manga = manga
+        manga.chapters = [chapter]
+
+        try await persistenceManager.mangas.save(manga)
+        try await persistenceManager.chapters.save(chapter)
+
+        let exact = try await persistenceManager.chapters.fetchByMangaIdAndNumber(
+            "m-1", number: 1.1)
+        XCTAssertEqual(exact?.id, "c-1")
+
+        let tolerant = try await persistenceManager.chapters.fetchByMangaIdAndNumber(
+            "m-1", number: 1.100_000_1)
+        XCTAssertEqual(tolerant?.id, "c-1")
+
+        let missing = try await persistenceManager.chapters.fetchByMangaIdAndNumber(
+            "m-1", number: 1.2)
+        XCTAssertNil(missing)
+    }
+
+    func testDeletingMangaRemovesDownloadedPageFiles() async throws {
+        let caches = try XCTUnwrap(
+            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        )
+        let fileURL = caches.appendingPathComponent("ReaderCoreTests-\(UUID().uuidString).jpg")
+        try Data("image".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let manga = MangaEntity(id: "m-1", title: "Manga", status: .ongoing, contentRating: .safe)
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 1)
+        let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
+        page.localPath = fileURL.path
+        page.isDownloaded = true
+        page.chapter = chapter
+        chapter.pages = [page]
+        chapter.manga = manga
+        manga.chapters = [chapter]
+
+        try await persistenceManager.mangas.save(manga)
+        try await persistenceManager.chapters.save(chapter)
+        try await persistenceManager.pages.save(page)
+
+        try await persistenceManager.mangas.delete(manga)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        let deletedChapter = try await persistenceManager.chapters.fetchById("c-1")
+        let deletedPage = try await persistenceManager.pages.fetchById(page.id)
+        XCTAssertNil(deletedChapter)
+        XCTAssertNil(deletedPage)
+    }
+}
+
+@MainActor
+final class SiteDeletionTests: XCTestCase {
+    var container: ModelContainer!
+    var persistenceManager: SwiftDataPersistenceManager!
+
+    override func setUp() async throws {
+        try await super.setUp()
+        container = try BlankGrimoireSchema.makeContainer(
+            isStoredInMemoryOnly: true,
+            name: "SiteDeletionTests"
+        )
+        persistenceManager = try SwiftDataPersistenceManager(container: container)
+    }
+
+    override func tearDown() async throws {
+        container = nil
+        persistenceManager = nil
+        try await super.tearDown()
+    }
+
+    func testDeletingSiteRemovesItsLibraryContent() async throws {
+        let profile = SiteProfile(
+            name: "Example Site",
+            baseURL: "https://example.org",
+            themeID: "theme.example"
+        )
+        try await persistenceManager.siteProfiles.save(profile)
+
+        let manga = MangaEntity(
+            id: MangaEntity.makeID(siteProfileID: profile.id, key: "/series/lorem"),
+            title: "Lorem",
+            siteProfileID: profile.id,
+            siteURL: profile.baseURL
+        )
+        let chapter = ChapterEntity(id: "chapter-1", number: 1, pageCount: 1)
+        chapter.manga = manga
+        manga.chapters = [chapter]
+        let page = PageEntity(index: 0, imageURL: "https://example.org/page-1.jpg")
+        page.chapter = chapter
+        chapter.pages = [page]
+        let progress = ReadingProgressEntity(
+            pageIndex: 0,
+            totalPages: 1,
+            manga: manga,
+            chapter: chapter
+        )
+        let bookmark = BookmarkEntity(note: "Lorem", pageIndex: 0, manga: manga, chapter: chapter)
+
+        try await persistenceManager.mangas.save(manga)
+        try await persistenceManager.chapters.save(chapter)
+        try await persistenceManager.pages.save(page)
+        try await persistenceManager.readingProgress.save(progress)
+        try await persistenceManager.bookmarks.save(bookmark)
+
+        let viewModel = SitesViewModel(
+            siteProfileRepository: persistenceManager.siteProfiles,
+            themeSource: EmptyThemeSource(),
+            mangaRepository: persistenceManager.mangas,
+            chapterRepository: persistenceManager.chapters,
+            pageRepository: persistenceManager.pages,
+            readingProgressRepository: persistenceManager.readingProgress,
+            bookmarkRepository: persistenceManager.bookmarks
+        )
+        await viewModel.loadProfiles()
+        await viewModel.deleteProfile(profile)
+
+        let mangas = try await persistenceManager.mangas.fetchAll()
+        let chapters = try await persistenceManager.chapters.fetchById("chapter-1")
+        let pages = try await persistenceManager.pages.fetchByChapterId("chapter-1")
+        let progressEntries = try await persistenceManager.readingProgress.fetchByMangaId(manga.id)
+        let bookmarks = try await persistenceManager.bookmarks.fetchByMangaId(manga.id)
+        let profiles = try await persistenceManager.siteProfiles.fetchAll()
+
+        XCTAssertTrue(mangas.isEmpty)
+        XCTAssertNil(chapters)
+        XCTAssertTrue(pages.isEmpty)
+        XCTAssertTrue(progressEntries.isEmpty)
+        XCTAssertTrue(bookmarks.isEmpty)
+        XCTAssertTrue(profiles.isEmpty)
+    }
+}
+
+private struct EmptyThemeSource: ThemeSource {
+    func listThemes() async throws -> [ThemeAdapter] { [] }
+    func getTheme(id: String) async throws -> ThemeAdapter? { nil }
+    func hasTheme(id: String) async throws -> Bool { false }
 }

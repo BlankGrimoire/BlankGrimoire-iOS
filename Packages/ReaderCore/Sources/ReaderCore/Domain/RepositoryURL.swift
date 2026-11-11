@@ -17,7 +17,12 @@ enum RepositoryURL {
             return nil
         }
 
-        if !value.contains("://") {
+        if let separator = value.range(of: "://") {
+            let scheme = value[..<separator.lowerBound].lowercased()
+            guard scheme == "http" || scheme == "https" else {
+                return nil
+            }
+        } else {
             value = "https://\(value)"
         }
 

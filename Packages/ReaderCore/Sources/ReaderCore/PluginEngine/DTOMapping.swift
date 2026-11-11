@@ -108,18 +108,25 @@ extension Page {
 }
 
 private enum ContractDate {
+    // Formatters are immutable after creation, so sharing them is safe and
+    // avoids allocating one for every parsed date.
+    nonisolated(unsafe) private static let fractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let wholeSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     static func parse(_ value: String?) -> Date? {
         guard let value else {
             return nil
         }
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) {
-            return date
-        }
-
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        return fractionalSeconds.date(from: value) ?? wholeSeconds.date(from: value)
     }
 }

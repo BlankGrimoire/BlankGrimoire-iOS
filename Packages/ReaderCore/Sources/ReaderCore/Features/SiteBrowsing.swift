@@ -51,10 +51,23 @@ public struct SiteSearchFailure: Identifiable, Sendable, Equatable {
 public struct SiteSearchOutcome: Sendable, Equatable {
     public let results: [SiteSearchResult]
     public let failures: [SiteSearchFailure]
+    /// Next result page per site, keyed by `siteProfileID`.
+    ///
+    /// The catalog extracts the URL from each site's own pagination selector,
+    /// so the caller only has to hand these back to `searchNextPage`.
+    public let nextPageURLs: [String: String]
 
-    public init(results: [SiteSearchResult] = [], failures: [SiteSearchFailure] = []) {
+    /// Whether at least one site has another result page.
+    public var hasMore: Bool { !nextPageURLs.isEmpty }
+
+    public init(
+        results: [SiteSearchResult] = [],
+        failures: [SiteSearchFailure] = [],
+        nextPageURLs: [String: String] = [:]
+    ) {
         self.results = results
         self.failures = failures
+        self.nextPageURLs = nextPageURLs
     }
 }
 
@@ -62,15 +75,50 @@ public struct SiteSearchOutcome: Sendable, Equatable {
 @MainActor
 public protocol SiteCatalogProviding: Sendable {
     func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome
+    /// Loads the next result page for the sites that announced one.
+    ///
+    /// Pass the previous outcome: implementations use its `nextPageURLs` to
+    /// fetch the following page without repeating the earlier requests.
+    func searchNextPage(
+        query: String,
+        in profiles: [SiteProfile],
+        continuingFrom outcome: SiteSearchOutcome
+    ) async -> SiteSearchOutcome
     func importManga(_ result: SiteSearchResult) async throws -> MangaEntity
     /// Refreshes details and chapters for an imported series from its site.
     func refreshChapters(for manga: MangaEntity) async throws
 }
 
+extension SiteCatalogProviding {
+    /// Catalogs that do not paginate report that no further page exists.
+    public func searchNextPage(
+        query: String,
+        in profiles: [SiteProfile],
+        continuingFrom outcome: SiteSearchOutcome
+    ) async -> SiteSearchOutcome {
+        SiteSearchOutcome()
+    }
+}
+
 /// Loads the pages of a chapter through its installed adapter.
 @MainActor
 public protocol ChapterPagesProviding: Sendable {
-    func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity]
+    /// Loads the pages, optionally ignoring a cached copy.
+    ///
+    /// Adapters can emit signed image URLs that expire, so callers must be
+    /// able to ask for a fresh set after a failed load or a completed challenge.
+    func pages(
+        for chapter: ChapterEntity,
+        manga: MangaEntity,
+        forceRefresh: Bool
+    ) async throws -> [PageEntity]
+}
+
+extension ChapterPagesProviding {
+    /// Convenience overload that uses the cache when it is still valid.
+    public func pages(for chapter: ChapterEntity, manga: MangaEntity) async throws -> [PageEntity] {
+        try await pages(for: chapter, manga: manga, forceRefresh: false)
+    }
 }
 
 /// Errors surfaced by site browsing and page loading.
@@ -87,30 +135,87 @@ public enum SiteBrowsingError: Error, LocalizedError, Sendable, Equatable {
     case challengeRequired(URL)
     case catalogUnavailable
 
+    /// User-facing text comes from `Localizable.xcstrings` in this module so
+    /// it can be translated without touching the error type.
     public var errorDescription: String? {
         switch self {
         case .adapterNotInstalled(let id):
-            return "No installed adapter named \(id). Install it from Settings → Adapters."
+            return String(
+                localized: "site.error.adapterNotInstalled",
+                defaultValue: "No installed adapter named \(id). Install it from Settings → Adapters.",
+                bundle: .module,
+                comment: "No adapter with this identifier is installed."
+            )
         case .siteProfileNotFound(let id):
-            return "Site profile not found: \(id)"
+            return String(
+                localized: "site.error.siteProfileNotFound",
+                defaultValue: "Site profile not found: \(id)",
+                bundle: .module,
+                comment: "The requested site profile no longer exists."
+            )
         case .invalidSiteURL(let url):
-            return "Invalid site URL: \(url)"
+            return String(
+                localized: "site.error.invalidSiteURL",
+                defaultValue: "Invalid site URL: \(url)",
+                bundle: .module,
+                comment: "The configured site URL is not a valid HTTPS URL."
+            )
         case .invalidSearchURL(let url):
-            return "Unable to build a search URL for \(url)"
+            return String(
+                localized: "site.error.invalidSearchURL",
+                defaultValue: "Unable to build a search URL for \(url)",
+                bundle: .module,
+                comment: "The search path could not be turned into a URL."
+            )
         case .searchFailed(let message):
-            return "Search failed: \(message)"
+            return String(
+                localized: "site.error.searchFailed",
+                defaultValue: "Search failed: \(message)",
+                bundle: .module,
+                comment: "A site search failed with a diagnostic message."
+            )
         case .chapterFetchFailed(let status):
-            return "The chapter page returned HTTP \(status)"
+            return String(
+                localized: "site.error.chapterFetchFailed",
+                defaultValue: "The chapter page returned HTTP \(status)",
+                bundle: .module,
+                comment: "The chapter request returned a non-success HTTP status."
+            )
         case .noPages:
-            return "The adapter returned no pages for this chapter"
+            return String(
+                localized: "site.error.noPages",
+                defaultValue: "The adapter returned no pages for this chapter",
+                bundle: .module,
+                comment: "The adapter returned an empty page list."
+            )
         case .duplicatePageIndex(let index):
-            return "The adapter returned duplicate page index \(index)"
+            return String(
+                localized: "site.error.duplicatePageIndex",
+                defaultValue: "The adapter returned duplicate page index \(index)",
+                bundle: .module,
+                comment: "The adapter returned two pages with the same index."
+            )
         case .invalidPageURL(let url):
-            return "The adapter returned an invalid page URL: \(url)"
+            return String(
+                localized: "site.error.invalidPageURL",
+                defaultValue: "The adapter returned an invalid page URL: \(url)",
+                bundle: .module,
+                comment: "The adapter returned a page URL the app refuses to load."
+            )
         case .challengeRequired(let url):
-            return "The site requires a verification before continuing: \(url.absoluteString)"
+            return String(
+                localized: "site.error.challengeRequired",
+                defaultValue: "The site requires a verification before continuing: \(url.absoluteString)",
+                bundle: .module,
+                comment: "The site asks the user to complete a verification page."
+            )
         case .catalogUnavailable:
-            return "Site browsing is unavailable"
+            return String(
+                localized: "site.error.catalogUnavailable",
+                defaultValue: "Site browsing is unavailable",
+                bundle: .module,
+                comment: "Cross-site browsing is not configured."
+            )
         }
     }
 }

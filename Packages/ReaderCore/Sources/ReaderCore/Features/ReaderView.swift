@@ -59,30 +59,10 @@
                         systemImage: "doc.richtext",
                         description: Text("This chapter has no readable pages.")
                     )
+                } else if readingDirection == .vertical {
+                    verticalReader(viewModel)
                 } else {
-                    TabView(
-                        selection: Binding(
-                            get: { viewModel.currentPageIndex },
-                            set: { index in
-                                Task { await viewModel.setPage(index: index) }
-                            }
-                        )
-                    ) {
-                        ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
-                            CachedAsyncImage(
-                                url: page.imageURL,
-                                loader: dependencies.imageLoader,
-                                headers: page.headers,
-                                contentMode: .fit,
-                                placeholderIcon: "photo"
-                            )
-                            .tag(index)
-                            .padding(.horizontal)
-                        }
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                    .environment(\.layoutDirection, readingDirection.layoutDirection)
-                    .background(Color.black)
+                    pagedReader(viewModel)
                 }
             }
             .navigationTitle(viewModel.chapter.title ?? "Chapter")
@@ -106,6 +86,9 @@
             .task {
                 await viewModel.load()
             }
+            .task(id: viewModel.currentPageIndex) {
+                await prefetchAdjacentPages(viewModel)
+            }
             .onChange(of: viewModel.challengeURL) { _, url in
                 guard let url else { return }
                 let hosts = Self.allowedHosts(for: viewModel.manga)
@@ -116,8 +99,9 @@
                 ChallengeView(
                     url: route.url,
                     allowedHosts: route.allowedHosts,
-                    onComplete: {
+                    onFinish: { outcome in
                         challengeRoute = nil
+                        guard outcome == .completed else { return }
                         Task { await viewModel.reload() }
                     }
                 )
@@ -133,12 +117,86 @@
                     }
                 )
             ) {
+                Button("Retry") {
+                    Task { await viewModel.reload() }
+                }
                 Button("OK", role: .cancel) {
                     viewModel.lastError = nil
                 }
             } message: {
                 Text(viewModel.lastError?.localizedDescription ?? "")
             }
+        }
+
+        /// Continuous vertical scrolling for the `vertical` reading mode.
+        private func verticalReader(_ viewModel: ReaderViewModel) -> some View {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
+                        CachedAsyncImage(
+                            url: page.imageURL,
+                            loader: dependencies.imageLoader,
+                            headers: page.headers,
+                            contentMode: .fit,
+                            placeholderIcon: "photo"
+                        )
+                        .frame(maxWidth: .infinity)
+                        .onAppear {
+                            guard index != viewModel.currentPageIndex else { return }
+                            Task { await viewModel.setPage(index: index) }
+                        }
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .background(Color.black)
+        }
+
+        /// Horizontal paged reading for left-to-right and right-to-left modes.
+        private func pagedReader(_ viewModel: ReaderViewModel) -> some View {
+            TabView(
+                selection: Binding(
+                    get: { viewModel.currentPageIndex },
+                    set: { index in
+                        Task { await viewModel.setPage(index: index) }
+                    }
+                )
+            ) {
+                ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
+                    CachedAsyncImage(
+                        url: page.imageURL,
+                        loader: dependencies.imageLoader,
+                        headers: page.headers,
+                        contentMode: .fit,
+                        placeholderIcon: "photo"
+                    )
+                    .tag(index)
+                    .padding(.horizontal)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .environment(\.layoutDirection, readingDirection.layoutDirection)
+            .background(Color.black)
+        }
+
+        /// Warms the two pages after the current one so a swipe does not wait
+        /// for the network. Pages already in flight are deduplicated by the
+        /// pipeline, so repeated calls are cheap.
+        private func prefetchAdjacentPages(_ viewModel: ReaderViewModel) async {
+            guard let loader = dependencies.imageLoader else { return }
+            let indices = [viewModel.currentPageIndex + 1, viewModel.currentPageIndex + 2]
+                .filter { $0 >= 0 && $0 < viewModel.pages.count }
+            guard !indices.isEmpty else { return }
+
+            var headers: [String: [String: String]] = [:]
+            let urls = indices.map { index -> String in
+                let page = viewModel.pages[index]
+                if let pageHeaders = page.headers {
+                    headers[page.imageURL] = pageHeaders
+                }
+                return page.imageURL
+            }
+            await loader.prefetch(urls, headers: headers)
         }
 
         private static func allowedHosts(for manga: MangaEntity) -> Set<String> {

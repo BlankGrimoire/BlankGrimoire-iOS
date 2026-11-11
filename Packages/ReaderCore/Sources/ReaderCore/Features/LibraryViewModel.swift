@@ -29,28 +29,52 @@ public enum LibraryFilterOption: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 public final class LibraryViewModel {
-    public var manga: [MangaEntity] = []
-    public var searchText: String = ""
-    public var sortOption: LibrarySortOption = .recentlyRead
-    public var filterOption: LibraryFilterOption = .all
+    /// All series known to the library. Assigning a new list rebuilds the view.
+    ///
+    /// The library works on `LibraryEntry` snapshots rather than live SwiftData
+    /// objects: filtering and sorting happen on the main actor, but the store
+    /// is read in the background (REP-01).
+    public var manga: [LibraryEntry] = [] {
+        didSet { rebuildVisibleManga() }
+    }
+
+    public var searchText: String = "" {
+        didSet { rebuildVisibleManga() }
+    }
+
+    public var sortOption: LibrarySortOption = .recentlyRead {
+        didSet { rebuildVisibleManga() }
+    }
+
+    public var filterOption: LibraryFilterOption = .all {
+        didSet { rebuildVisibleManga() }
+    }
+
     public var isLoading: Bool = false
     public var lastError: Error?
+
+    /// Filtered and sorted list, rebuilt only when an input changes.
+    ///
+    /// SwiftUI reads this property on every render; recomputing the whole
+    /// library there made large libraries janky on the main actor.
+    public private(set) var filteredManga: [LibraryEntry] = []
 
     private let mangaRepository: any MangaRepository
 
     public init(mangaRepository: any MangaRepository) {
         self.mangaRepository = mangaRepository
+        rebuildVisibleManga()
     }
 
-    /// Filtered and sorted manga list
-    public var filteredManga: [MangaEntity] {
+    private func rebuildVisibleManga() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         var result = manga
 
-        if !searchText.isEmpty {
+        if !query.isEmpty {
             result = result.filter { manga in
-                manga.title.localizedCaseInsensitiveContains(searchText)
-                    || manga.authors.contains { $0.localizedCaseInsensitiveContains(searchText) }
-                    || manga.tags.contains { $0.localizedCaseInsensitiveContains(searchText) }
+                manga.title.localizedCaseInsensitiveContains(query)
+                    || manga.authors.contains { $0.localizedCaseInsensitiveContains(query) }
+                    || manga.tags.contains { $0.localizedCaseInsensitiveContains(query) }
             }
         }
 
@@ -67,20 +91,41 @@ public final class LibraryViewModel {
             result = result.filter { $0.readingProgress == 0 }
         }
 
+        result.sort(by: sortComparator)
+
+        // A stable secondary order keeps equal entries from jumping between
+        // renders (for example series that were never read).
+        filteredManga = result
+    }
+
+    private func sortComparator(_ lhs: LibraryEntry, _ rhs: LibraryEntry) -> Bool {
+        let primary: ComparisonResult
         switch sortOption {
         case .recentlyRead:
-            result.sort { ($0.lastReadAt ?? .distantPast) > ($1.lastReadAt ?? .distantPast) }
+            primary = compare(rhs.lastReadAt ?? .distantPast, lhs.lastReadAt ?? .distantPast)
         case .title:
-            result.sort { $0.title.localizedCompare($1.title) == .orderedAscending }
+            primary = lhs.title.localizedStandardCompare(rhs.title)
         case .titleDescending:
-            result.sort { $0.title.localizedCompare($1.title) == .orderedDescending }
+            primary = rhs.title.localizedStandardCompare(lhs.title)
         case .recentlyAdded:
-            result.sort { $0.createdAt > $1.createdAt }
+            primary = compare(rhs.createdAt, lhs.createdAt)
         case .progress:
-            result.sort { $0.readingProgress > $1.readingProgress }
+            primary = compare(rhs.readingProgress, lhs.readingProgress)
         }
 
-        return result
+        if primary != .orderedSame {
+            return primary == .orderedAscending
+        }
+        if lhs.title.localizedStandardCompare(rhs.title) != .orderedSame {
+            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        }
+        return lhs.id < rhs.id
+    }
+
+    private func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
+        if lhs < rhs { return .orderedAscending }
+        if lhs > rhs { return .orderedDescending }
+        return .orderedSame
     }
 
     /// Load manga from repository
@@ -90,32 +135,54 @@ public final class LibraryViewModel {
         defer { isLoading = false }
 
         do {
-            manga = try await mangaRepository.fetchAll()
+            manga = try await mangaRepository.fetchLibraryIndex()
         } catch {
             lastError = error
         }
     }
 
-    /// Toggle favorite status
-    public func toggleFavorite(_ manga: MangaEntity) async {
-        let previousValue = manga.isFavorite
-        manga.isFavorite.toggle()
-
+    /// Toggle favorite status.
+    ///
+    /// The list holds snapshots, so the write goes through the persisted
+    /// entity and the snapshot is updated in place on success.
+    public func toggleFavorite(_ entry: LibraryEntry) async {
         do {
-            try await mangaRepository.save(manga)
+            guard let entity = try await mangaRepository.fetchById(entry.id) else {
+                lastError = PersistenceError.recordNotFound(entity: "MangaEntity", id: entry.id)
+                return
+            }
+            let previousValue = entity.isFavorite
+            entity.isFavorite.toggle()
+
+            do {
+                try await mangaRepository.save(entity)
+                replaceEntry(entry.withFavorite(entity.isFavorite))
+            } catch {
+                entity.isFavorite = previousValue
+                throw error
+            }
         } catch {
-            manga.isFavorite = previousValue
             lastError = error
         }
     }
 
-    /// Delete manga
-    public func deleteManga(_ manga: MangaEntity) async {
+    /// Delete manga and its downloaded content.
+    public func deleteManga(_ entry: LibraryEntry) async {
         do {
-            try await mangaRepository.delete(manga)
-            await loadManga()
+            guard let entity = try await mangaRepository.fetchById(entry.id) else {
+                // Already gone in the store: drop the stale row anyway.
+                manga.removeAll { $0.id == entry.id }
+                return
+            }
+            try await mangaRepository.delete(entity)
+            manga.removeAll { $0.id == entry.id }
         } catch {
             lastError = error
         }
+    }
+
+    private func replaceEntry(_ entry: LibraryEntry) {
+        guard let index = manga.firstIndex(where: { $0.id == entry.id }) else { return }
+        manga[index] = entry
     }
 }

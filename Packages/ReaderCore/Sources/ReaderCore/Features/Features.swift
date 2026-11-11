@@ -126,7 +126,10 @@
                 Section("Adapters") {
                     if let adapterStore = dependencies.adapterStore {
                         NavigationLink("Repositories and adapters") {
-                            AdapterManagementView(store: adapterStore)
+                            AdapterManagementView(
+                                store: adapterStore,
+                                siteProfileRepository: dependencies.siteProfileRepository
+                            )
                         }
                     } else {
                         Text("Adapter management is unavailable.")

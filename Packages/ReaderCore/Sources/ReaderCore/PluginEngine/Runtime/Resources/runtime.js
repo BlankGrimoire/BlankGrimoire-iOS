@@ -21,11 +21,13 @@ var BlankGrimoireRuntime = (() => {
   // src/index.ts
   var index_exports = {};
   __export(index_exports, {
+    UnsupportedApiVersionError: () => UnsupportedApiVersionError,
     __apiVersion: () => __apiVersion,
     __http: () => __http,
     __nativeInvoke: () => __nativeInvoke,
     __parseHTML: () => __parseHTML,
     __timerFire: () => __timerFire,
+    assertAdapterAPIVersion: () => assertAdapterAPIVersion,
     clearTimeout: () => clearTimeout,
     console: () => console,
     dispatch: () => dispatch,
@@ -498,6 +500,19 @@ var BlankGrimoireRuntime = (() => {
   }
 
   // src/engine.ts
+  var UnsupportedApiVersionError = class extends Error {
+    constructor(found) {
+      super(`Unsupported adapter apiVersion ${String(found)}; expected ${API_VERSION}`);
+      this.expected = API_VERSION;
+      this.name = "UnsupportedApiVersionError";
+      this.found = found;
+    }
+  };
+  function assertAdapterAPIVersion(adapter) {
+    if (adapter.apiVersion !== API_VERSION) {
+      throw new UnsupportedApiVersionError(adapter.apiVersion);
+    }
+  }
   function resolveSelectors(base, overrides) {
     const resolved = {
       search: { ...base.search, ...overrides.search },
@@ -532,6 +547,13 @@ var BlankGrimoireRuntime = (() => {
     const image = element.querySelector("img") ?? element;
     const value = firstAttribute(image, ["data-src", "src", "data-original"]);
     return value ? resolveURL(value, baseURL) : void 0;
+  }
+  function selectLink(element, selector) {
+    const descendant = selector ? element.querySelector(selector) : null;
+    if (descendant) {
+      return descendant;
+    }
+    return attr(element, "href") ? element : null;
   }
   function splitList(value) {
     if (!value) {
@@ -587,6 +609,7 @@ var BlankGrimoireRuntime = (() => {
     return Number.isFinite(number) ? number : void 0;
   }
   async function extractSearch(runtime, query) {
+    assertAdapterAPIVersion(runtime.adapter);
     const hook = runtime.adapter.hooks?.search;
     if (hook) {
       return hook(runtime.context, query);
@@ -594,9 +617,9 @@ var BlankGrimoireRuntime = (() => {
     const selectors = selectorsFor(runtime).search;
     const items = [];
     for (const element of queryAll(runtime.document, selectors.item)) {
-      const title = textOf(element.querySelector(selectors.title));
-      const link = element.querySelector(selectors.link);
+      const link = selectLink(element, selectors.link);
       const href = link ? attr(link, "href") : null;
+      const title = textOf(element.querySelector(selectors.title)) || (link ? textOf(link) : "");
       if (title === "" || !href) {
         continue;
       }
@@ -614,6 +637,7 @@ var BlankGrimoireRuntime = (() => {
     return { items, hasNextPage };
   }
   async function extractDetails(runtime, key) {
+    assertAdapterAPIVersion(runtime.adapter);
     const hook = runtime.adapter.hooks?.getMangaDetails;
     if (hook) {
       return hook(runtime.context, key);
@@ -677,6 +701,7 @@ var BlankGrimoireRuntime = (() => {
     return details;
   }
   async function extractChapters(runtime, key) {
+    assertAdapterAPIVersion(runtime.adapter);
     const hook = runtime.adapter.hooks?.getChapters;
     if (hook) {
       return hook(runtime.context, key);
@@ -685,12 +710,12 @@ var BlankGrimoireRuntime = (() => {
     const baseURL = runtime.context.baseURL;
     const chapters = [];
     for (const element of queryAll(runtime.document, selectors.item)) {
-      const link = element.querySelector(selectors.link);
+      const link = selectLink(element, selectors.link);
       const href = link ? attr(link, "href") : null;
       if (!href) {
         continue;
       }
-      const title = selectors.title ? readText(element, selectors.title) : textOf(link) || void 0;
+      const title = selectors.title ? (readText(element, selectors.title) ?? textOf(link)) || void 0 : textOf(link) || void 0;
       const chapter = { key: resolveURL(href, baseURL) };
       if (title) {
         chapter.title = title;
@@ -721,6 +746,7 @@ var BlankGrimoireRuntime = (() => {
     return chapters;
   }
   async function extractPages(runtime, keys) {
+    assertAdapterAPIVersion(runtime.adapter);
     const hook = runtime.adapter.hooks?.getPages;
     if (hook) {
       return hook(runtime.context, keys.mangaKey, keys.chapterKey);
@@ -749,6 +775,7 @@ var BlankGrimoireRuntime = (() => {
     return JSON.stringify(value) ?? "null";
   }
   async function dispatch(runtime, method, argsJSON) {
+    assertAdapterAPIVersion(runtime.adapter);
     const args = asRecord(argsJSON.trim() === "" ? {} : JSON.parse(argsJSON));
     switch (method) {
       case "search": {
