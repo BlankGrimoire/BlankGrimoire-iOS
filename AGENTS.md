@@ -43,6 +43,7 @@ Swift 6 strict concurrency; `swift format`; no force unwraps, `try!`, or IUOs ou
 |------|---------|
 | Generate Xcode project | `make gen` |
 | Package tests | `make test-readercore` |
+| App tests | `make test` |
 | App build (CI-equivalent) | `xcodebuild build -scheme <APP_SCHEME> -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO` |
 | Sync SDK (local) | `make sync-sdk SDK_REPO_PATH=../BlankGrimoire-sdk` |
 | Sync SDK (release) | `make sync-sdk-release` (uses `.sdk-version`) |
