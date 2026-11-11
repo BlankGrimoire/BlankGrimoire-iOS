@@ -78,7 +78,10 @@ make verify-sdk                          # re-check the vendored files
 
 `make sync-sdk` never changes the pinned version unless you pass
 `SDK_VERSION=<version>`. Update `.sdk-version`, run `make sync-sdk-release`,
-commit the generated files and the pin together.
+commit the generated files and the pin together. The release sync verifies the
+downloaded files against the recorded checksums when the pin is unchanged;
+after a version bump it records new checksums from the release assets, so
+review the diff before committing.
 
 ## Related repositories
 
