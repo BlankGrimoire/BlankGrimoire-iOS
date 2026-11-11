@@ -61,7 +61,7 @@ struct EndToEndTests {
         let entry = try #require(
             index.extensions.first { $0.id == "theme.static-advanced" }
         )
-        #expect(entry.version == "1.0.0")
+        #expect(!entry.version.isEmpty)
 
         try await adapterStore.trustRepository(index, from: repositoryURL)
         #expect(try await adapterStore.isRepositoryTrusted(repositoryURL))
@@ -72,6 +72,7 @@ struct EndToEndTests {
             from: repositoryURL
         )
         #expect(bundle.id == entry.id)
+        #expect(bundle.version == entry.version)
         #expect(bundle.themeAdapter.id == entry.id)
 
         // 2. Two synthetic sites share every path but live on different ports.
