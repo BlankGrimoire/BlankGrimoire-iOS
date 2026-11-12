@@ -280,19 +280,38 @@ public struct ThemeSignature: Codable, Sendable, Equatable {
     public let scriptSrc: [String]?
     public let probePaths: [String]?
     public let minScore: Int
+    /// Whether this theme requires WebView mode to solve JavaScript challenges
+    /// (Cloudflare Turnstile, hCaptcha, etc.) automatically.
+    public let usesWebViewMode: Bool
 
     public init(
         metaGenerator: String? = nil,
         selectors: [String]? = nil,
         scriptSrc: [String]? = nil,
         probePaths: [String]? = nil,
-        minScore: Int
+        minScore: Int,
+        usesWebViewMode: Bool = false
     ) {
         self.metaGenerator = metaGenerator
         self.selectors = selectors
         self.scriptSrc = scriptSrc
         self.probePaths = probePaths
         self.minScore = minScore
+        self.usesWebViewMode = usesWebViewMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        metaGenerator = try container.decodeIfPresent(String.self, forKey: .metaGenerator)
+        selectors = try container.decodeIfPresent([String].self, forKey: .selectors)
+        scriptSrc = try container.decodeIfPresent([String].self, forKey: .scriptSrc)
+        probePaths = try container.decodeIfPresent([String].self, forKey: .probePaths)
+        minScore = try container.decode(Int.self, forKey: .minScore)
+        usesWebViewMode = try container.decodeIfPresent(Bool.self, forKey: .usesWebViewMode) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case metaGenerator, selectors, scriptSrc, probePaths, minScore, usesWebViewMode
     }
 }
 

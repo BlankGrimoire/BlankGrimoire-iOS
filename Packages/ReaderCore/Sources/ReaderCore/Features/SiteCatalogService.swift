@@ -240,7 +240,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
             } else {
                 searchURL = try makeSearchURL(profile: profile, bundle: session.bundle, query: query)
             }
-            let html = try await fetchHTML(searchURL, session: session)
+            let html = try await fetchHTML(searchURL, session: session, profile: profile)
             let context = PluginPageContext(
                 html: html,
                 baseURL: searchURL.absoluteString,
@@ -400,7 +400,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(result.key)
         }
-        let html = try await fetchHTML(detailsURL, session: session)
+        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -436,7 +436,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(key)
         }
-        let html = try await fetchHTML(detailsURL, session: session)
+        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -549,15 +549,20 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     // MARK: - Networking
 
-    private func fetchHTML(_ url: URL, session: AdapterSession) async throws -> String {
-        let response = try await session.bridge.request(HttpRequest(url: url.absoluteString))
-        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
-            throw SiteBrowsingError.challengeRequired(url)
+    private func fetchHTML(_ url: URL, session: AdapterSession, profile: SiteProfile) async throws -> String {
+        do {
+            let response = try await session.bridge.hybridRequest(
+                HttpRequest(url: url.absoluteString), siteProfile: profile)
+            guard (200...299).contains(response.status) else {
+                throw SiteBrowsingError.searchFailed("HTTP \(response.status)")
+            }
+            return response.body
+        } catch let error as PluginEngineError {
+            if case .challengeRequired(let challengeURL) = error {
+                throw SiteBrowsingError.challengeRequired(challengeURL)
+            }
+            throw error
         }
-        guard (200...299).contains(response.status) else {
-            throw SiteBrowsingError.searchFailed("HTTP \(response.status)")
-        }
-        return response.body
     }
 }
 

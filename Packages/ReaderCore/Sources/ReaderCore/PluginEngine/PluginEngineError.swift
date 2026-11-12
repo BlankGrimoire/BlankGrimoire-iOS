@@ -17,6 +17,9 @@ public enum PluginEngineError: Error, LocalizedError, Sendable, Equatable {
     case requestNotConfigured
     case disposed
     case documentTooLarge(limit: Int)
+    /// A site challenge (CAPTCHA, Turnstile, etc.) was encountered that requires user interaction.
+    /// The associated URL is the challenge page that must be loaded in a visible WebView.
+    case challengeRequired(URL)
 
     public var errorDescription: String? {
         switch self {
@@ -46,6 +49,8 @@ public enum PluginEngineError: Error, LocalizedError, Sendable, Equatable {
             return "The JavaScript plugin runtime has been disposed"
         case .documentTooLarge(let limit):
             return "The parsed HTML document exceeds the \(limit)-byte limit"
+        case .challengeRequired(let url):
+            return "The site requires a verification before continuing: \(url.absoluteString)"
         }
     }
 }

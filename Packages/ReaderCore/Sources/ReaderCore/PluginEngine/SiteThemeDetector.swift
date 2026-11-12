@@ -37,11 +37,14 @@ public final class DefaultSiteThemeDetector: SiteThemeDetecting {
             allowedHosts: [host]
         )
         let requestHandler = PluginRequestHandler(policy: policy, logger: logger)
+        let bridge = PluginBridge(policy: policy, logger: logger)
         let detector = ThemeDetector(
             adapterStore: adapterStore,
             requestHandler: requestHandler,
+            bridge: bridge,
             logger: logger
         )
+        defer { bridge.dispose() }
         return try await detector.detectTheme(for: baseURL)
     }
 }
