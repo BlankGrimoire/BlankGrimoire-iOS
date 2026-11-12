@@ -239,8 +239,10 @@
 
     @MainActor
     final class PreviewCatalogService: SiteCatalogProviding {
-        func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
-            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
+            guard
+                !query.text!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(query.genres?.isEmpty ?? true)
+            else {
                 return SiteSearchOutcome()
             }
             let results = profiles.map { profile in
@@ -248,12 +250,20 @@
                     siteProfileID: profile.id,
                     siteName: profile.name,
                     siteURL: profile.baseURL,
-                    key: "\(profile.baseURL)/series/lorem-ipsum",
+                    key: "(profile.baseURL)/series/lorem-ipsum",
                     title: "Lorem Ipsum",
                     coverURL: "https://example.org/covers/lorem.jpg"
                 )
             }
             return SiteSearchOutcome(results: results)
+        }
+
+        func searchNextPage(
+            query: SearchQuery,
+            in profiles: [SiteProfile],
+            continuingFrom outcome: SiteSearchOutcome
+        ) async -> SiteSearchOutcome {
+            SiteSearchOutcome()
         }
 
         func importManga(_ result: SiteSearchResult) async throws -> MangaEntity {

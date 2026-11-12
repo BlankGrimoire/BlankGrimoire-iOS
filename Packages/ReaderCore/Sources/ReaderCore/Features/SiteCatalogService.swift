@@ -55,12 +55,12 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     // MARK: - Search
 
-    public func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
+    public func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
         await runSearch(query: query, profiles: profiles, startURLs: nil)
     }
 
     public func searchNextPage(
-        query: String,
+        query: SearchQuery,
         in profiles: [SiteProfile],
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome {
@@ -77,12 +77,12 @@ public final class SiteCatalogService: SiteCatalogProviding {
     /// from its theme. For a follow-up page it holds the URL extracted from
     /// each site's own "next" link.
     private func runSearch(
-        query: String,
+        query: SearchQuery,
         profiles: [SiteProfile],
         startURLs: [String: String]?
     ) async -> SiteSearchOutcome {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        let trimmed = query.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty || !(query.genres?.isEmpty ?? true) else {
             return SiteSearchOutcome()
         }
 
@@ -563,6 +563,91 @@ public final class SiteCatalogService: SiteCatalogProviding {
             }
             throw error
         }
+    }
+
+    // MARK: - Genre Filtering
+
+    public func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter] {
+        let lease = try await sessionPool.acquire(
+            profile: profile,
+            adapterStore: adapterStore,
+            bridgeFactory: bridgeFactory,
+            runtimeFactory: runtimeFactory
+        )
+        defer { lease.release() }
+        let session = lease.session
+
+        guard let genreSelectors = session.bundle.themeAdapter.selectors.genre else {
+            return []
+        }
+
+        // Convert ThemeSelectors.GenreSelectors to GenreMapping
+        let genreMapping = GenreMapping(
+            source: genreSelectors.source,
+            displayNameAttr: genreSelectors.displayNameAttr,
+            valueAttr: genreSelectors.valueAttr,
+            valuePattern: genreSelectors.valuePattern,
+            filterParam: genreSelectors.filterParam
+        )
+
+        let genresURL = try makeGenresURL(profile: profile, bundle: session.bundle)
+        let html = try await self.fetchHTML(genresURL, session: session, profile: profile)
+
+        let context = PluginPageContext(
+            html: html,
+            baseURL: genresURL.absoluteString,
+            siteName: profile.name,
+            overrides: profile.selectorOverrides
+        )
+
+        let result = try await session.runtime.extractGenres(
+            mapping: genreMapping,
+            in: context
+        )
+        return result.filters
+    }
+
+    public func fetchUnifiedGenres(for profiles: [SiteProfile]) async -> [UnifiedGenre] {
+        var genreMap: [String: [String: SiteGenreFilter]] = [:]
+
+        await withTaskGroup(of: (String, [SiteGenreFilter]).self) { group in
+            for profile in profiles.filter(\.isEnabled) {
+                group.addTask { @Sendable in
+                    do {
+                        let filters = try await self.fetchGenres(for: profile)
+                        return (profile.id, filters)
+                    } catch {
+                        return (profile.id, [])
+                    }
+                }
+            }
+
+            for await (siteProfileID, filters) in group {
+                for filter in filters {
+                    let key = filter.displayName.lowercased()
+                    genreMap[key, default: [:]][siteProfileID] = filter
+                }
+            }
+        }
+
+        return genreMap.map { (key, siteFilters) in
+            UnifiedGenre(
+                displayName: siteFilters.values.first?.displayName ?? key.capitalized,
+                siteFilters: siteFilters
+            )
+        }.sorted { $0.displayName < $1.displayName }
+    }
+
+    private func makeGenresURL(profile: SiteProfile, bundle: AdapterBundle) throws -> URL {
+        let baseURL = URL(string: profile.baseURL)!
+        let genrePaths = ["/genre", "/genres", "/genre-list", "/category", "/categories"]
+
+        for path in genrePaths {
+            if let url = URL(string: path, relativeTo: baseURL) {
+                return url
+            }
+        }
+        return baseURL
     }
 }
 

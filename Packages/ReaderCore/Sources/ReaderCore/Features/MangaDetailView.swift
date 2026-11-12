@@ -256,9 +256,27 @@
             .card()
         }
 
-        private var tagsSection: some View {
+        private var genresSection: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 Text("Genres")
+                    .font(Typography.headline)
+
+                FlowLayout(spacing: DesignTokens.Spacing.xs) {
+                    ForEach(manga.genres ?? [], id: \.self) { genre in
+                        Text(genre)
+                            .font(Typography.caption1)
+                            .padding(.horizontal, DesignTokens.Spacing.sm)
+                            .padding(.vertical, DesignTokens.Spacing.xs)
+                            .background(AppColor.primary.opacity(0.1), in: Capsule())
+                            .foregroundStyle(AppColor.primary)
+                    }
+                }
+            }
+        }
+
+        private var tagsSection: some View {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                Text("Tags")
                     .font(Typography.headline)
 
                 FlowLayout(spacing: DesignTokens.Spacing.xs) {
@@ -267,8 +285,8 @@
                             .font(Typography.caption1)
                             .padding(.horizontal, DesignTokens.Spacing.sm)
                             .padding(.vertical, DesignTokens.Spacing.xs)
-                            .background(AppColor.primary.opacity(0.1), in: Capsule())
-                            .foregroundStyle(AppColor.primary)
+                            .background(AppColor.secondary.opacity(0.1), in: Capsule())
+                            .foregroundStyle(AppColor.secondary)
                     }
                 }
             }
@@ -368,6 +386,10 @@
 
                     if let synopsis = manga.synopsis, !synopsis.isEmpty {
                         synopsisSection
+                    }
+
+                    if !manga.genres.isEmpty {
+                        genresSection
                     }
 
                     if !manga.tags.isEmpty {

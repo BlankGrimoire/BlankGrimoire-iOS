@@ -15,6 +15,7 @@ public final class MangaEntity {
     public var artists: [String]
     public var synopsis: String?
     public var tags: [String]
+    public var genres: [String]
     public var status: MangaStatus
     public var contentRating: ContentRating
     public var lastReadAt: Date?
@@ -54,6 +55,7 @@ public final class MangaEntity {
         artists: [String] = [],
         synopsis: String? = nil,
         tags: [String] = [],
+        genres: [String] = [],
         status: MangaStatus = .unknown,
         contentRating: ContentRating = .unknown,
         isFavorite: Bool = false,
@@ -71,6 +73,7 @@ public final class MangaEntity {
         self.artists = artists
         self.synopsis = synopsis
         self.tags = tags
+        self.genres = genres
         self.status = status
         self.contentRating = contentRating
         self.lastReadAt = nil

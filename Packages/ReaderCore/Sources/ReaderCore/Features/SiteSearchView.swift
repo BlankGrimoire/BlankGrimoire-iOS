@@ -14,6 +14,7 @@
     public final class SiteSearchViewModel {
         public var query: String = ""
         public var selectedSiteID: String?
+        public var selectedGenres: Set<String> = []
         public var sites: [SiteProfile] = []
         public private(set) var results: [SiteSearchResult] = []
         public private(set) var failures: [SiteSearchFailure] = []
@@ -89,8 +90,9 @@
                 return
             }
 
-            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
+            let searchQuery = SearchQuery(
+                text: query.trimmingCharacters(in: .whitespacesAndNewlines), page: 1, genres: Array(selectedGenres))
+            guard !searchQuery.text!.isEmpty || !searchQuery.genres!.isEmpty else {
                 results = []
                 failures = []
                 hasSearched = false
@@ -121,7 +123,7 @@
                 }
             }
 
-            let outcome = await catalogService.search(query: trimmed, in: targets)
+            let outcome = await catalogService.search(searchQuery, in: targets)
             guard generation == searchGeneration, !Task.isCancelled else { return }
             results = outcome.results
             failures = outcome.failures
@@ -142,8 +144,9 @@
                 return
             }
 
-            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
+            let searchQuery = SearchQuery(
+                text: query.trimmingCharacters(in: .whitespacesAndNewlines), page: 1, genres: Array(selectedGenres))
+            guard !searchQuery.text!.isEmpty || !searchQuery.genres!.isEmpty else { return }
 
             let outcome = SiteSearchOutcome(
                 results: results,
@@ -160,7 +163,7 @@
             }
 
             let next = await catalogService.searchNextPage(
-                query: trimmed,
+                query: searchQuery,
                 in: targetSites,
                 continuingFrom: outcome
             )
@@ -338,6 +341,13 @@
             }
         }
 
+        private static let commonGenres: Set<String> = [
+            "action", "adventure", "comedy", "drama", "fantasy", "horror",
+            "isekai", "romance", "sci-fi", "slice-of-life", "sports",
+            "supernatural", "thriller", "historical", "psychological",
+            "mystery", "ecchi", "harem", "shounen", "shoujo", "seinen", "josei",
+        ]
+
         private var resultsList: some View {
             List {
                 if viewModel.isSearching {
@@ -355,6 +365,16 @@
                         Text("All sites").tag(String?.none)
                         ForEach(viewModel.searchableSites) { site in
                             Text(site.name).tag(Optional(site.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                Section {
+                    Picker("Genres", selection: $viewModel.selectedGenres) {
+                        Text("All Genres").tag(Set<String>())
+                        ForEach(Array(Self.commonGenres).sorted(), id: \.self) { genre in
+                            Text(genre.capitalized).tag(Set([genre]))
                         }
                     }
                     .pickerStyle(.menu)
