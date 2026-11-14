@@ -15,6 +15,7 @@
         @State private var challengeRoute: ChallengeRoute?
         @State private var isChromeVisible = true
         @State private var showingChapterPicker = false
+        @State private var reloadToken = 0
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @Environment(\.dismiss) private var dismiss
 
@@ -165,7 +166,8 @@
                             headers: page.headers,
                             siteBaseURL: viewModel.manga.siteURL,
                             contentMode: .fit,
-                            placeholderIcon: "photo"
+                            placeholderIcon: "photo",
+                            reloadID: reloadToken
                         )
                         .frame(maxWidth: .infinity)
                         .onAppear {
@@ -195,7 +197,8 @@
                         headers: page.headers,
                         siteBaseURL: viewModel.manga.siteURL,
                         contentMode: .fit,
-                        placeholderIcon: "photo"
+                        placeholderIcon: "photo",
+                        reloadID: reloadToken
                     )
                     .tag(index)
                     .padding(.horizontal)
@@ -226,6 +229,16 @@
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+
+                Button {
+                    reloadImages(viewModel)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.title3.weight(.medium))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Reload images")
             }
             .padding(.horizontal, 8)
             .frame(height: 52)
@@ -317,6 +330,19 @@
             Task {
                 await viewModel.flushProgress()
                 dismiss()
+            }
+        }
+
+        /// Re-fetches the chapter pages and retries every image.
+        ///
+        /// Some sites occasionally return broken pages on the first request.
+        /// The token forces the image views to run their request again even
+        /// when the URL did not change; failed downloads are not cached, so
+        /// they are requested from the site again.
+        private func reloadImages(_ viewModel: ReaderViewModel) {
+            Task {
+                reloadToken += 1
+                await viewModel.reload()
             }
         }
 
