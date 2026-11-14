@@ -5,6 +5,7 @@ import Testing
 
 @testable import ReaderCore
 
+@MainActor
 struct AdapterBundleInspectionTests {
     /// Mirrors the shape esbuild emits for a real adapter: a minified IIFE
     /// with a getter export, not a `{ default: ... }` object literal.
