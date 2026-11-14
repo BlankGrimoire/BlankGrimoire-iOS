@@ -1,0 +1,14 @@
+{
+  "strategies": [
+    {
+      "kind": "css",
+      "image": ".reader img",
+      "srcAttributes": ["data-src", "src"]
+    },
+    {
+      "kind": "scriptJSON",
+      "pattern": "window.__PAGES__",
+      "path": "pages"
+    }
+  ]
+}

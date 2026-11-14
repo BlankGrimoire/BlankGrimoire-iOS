@@ -1,0 +1,7 @@
+{
+  "url": "https://example.org/search?q=lorem",
+  "method": "GET",
+  "headers": {
+    "Accept": "text/html"
+  }
+}

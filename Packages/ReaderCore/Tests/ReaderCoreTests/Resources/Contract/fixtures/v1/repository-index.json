@@ -1,0 +1,16 @@
+{
+  "formatVersion": 1,
+  "name": "Example Repository",
+  "publicKey": "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "extensions": [
+    {
+      "id": "theme.example",
+      "name": "Example Theme",
+      "version": "1.0.0",
+      "apiVersion": 1,
+      "bundleURL": "extensions/theme.example-1.0.0.js",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bundleSignature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    }
+  ]
+}

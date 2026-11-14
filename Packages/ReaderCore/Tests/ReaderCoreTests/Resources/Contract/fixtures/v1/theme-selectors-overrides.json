@@ -1,0 +1,17 @@
+{
+  "search": {
+    "title": ".custom-result-title"
+  },
+  "details": {
+    "status": ".custom-status"
+  },
+  "pages": {
+    "strategies": [
+      {
+        "kind": "css",
+        "image": ".custom-reader img",
+        "srcAttributes": ["data-src"]
+      }
+    ]
+  }
+}

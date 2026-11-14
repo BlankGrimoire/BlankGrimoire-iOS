@@ -14,6 +14,8 @@ gathers everything in a single, private library.
 - 📚 **Unified library**: all your series in one place, from any site you add
 - 🔖 **Reading progress**: resume exactly where you left off
 - 📖 **Native reader**: smooth vertical/paged reading with aggressive prefetching
+- 🔎 **Cross-site search**: query every enabled site, then load more results
+  page by page following each site's own pagination
 - 🚫 **Ad-free**: only the content, with full attribution to the original site
 - 🧩 **Theme adapters**: one adapter supports every site built on the same theme
 - ☁️ **iCloud sync** across iPhone and iPad (planned)
@@ -28,23 +30,58 @@ gathers everything in a single, private library.
 ```bash
 git clone git@github.com:BlankGrimoire/BlankGrimoire-iOS.git
 cd BlankGrimoire-iOS
-make gen     # generates BlankGrimoire.xcodeproj (not versioned)
-make test    # runs package tests headlessly with `swift test`
+make gen              # generates BlankGrimoire.xcodeproj (not versioned)
+make lint             # swift-format check
+make test-readercore  # ReaderCore package tests (fast, no simulator)
+make test             # app tests on the default iPhone simulator
 open BlankGrimoire.xcodeproj
 ```
 
+`make test-readercore` builds outside iCloud by default
+(`READERCORE_SCRATCH=~/Library/Caches/BlankGrimoire/ReaderCoreBuild`). Point it
+elsewhere with `READERCORE_SCRATCH=/path` if needed.
+
 ## Project structure
+
+ReaderCore is a single SwiftPM target; its folders are organisational, not
+separate modules.
 
 | Path | Purpose |
 |---|---|
-| `App/` | Thin app target: composition root and resources |
-| `Packages/ReaderCore/Sources/Domain` | Entities and protocols, no dependencies |
-| `Packages/ReaderCore/Sources/PluginEngine` | JavaScriptCore runtime and theme detection |
-| `Packages/ReaderCore/Sources/Persistence` | SwiftData models and repositories |
-| `Packages/ReaderCore/Sources/ImagePipeline` | Image cache and prefetching |
-| `Packages/ReaderCore/Sources/Features` | SwiftUI views and view models |
+| `BlankGrimoire/` | App target: entry point, composition root (`AppComposition`) and `Info.plist` |
+| `Packages/ReaderCore/Sources/ReaderCore/Domain` | Contract DTOs (`ContractModels.swift`) and URL value types |
+| `Packages/ReaderCore/Sources/ReaderCore/PluginEngine` | JavaScriptCore runtime, HTML bridge, HTTP policy, theme detection and sources |
+| `Packages/ReaderCore/Sources/ReaderCore/Persistence` | SwiftData entities/schema, repositories and the signed adapter store |
+| `Packages/ReaderCore/Sources/ReaderCore/ImagePipeline` | Image cache and prefetching |
+| `Packages/ReaderCore/Sources/ReaderCore/Features` | SwiftUI views, view models, dependency composition and the adapter session pool |
+| `Packages/ReaderCore/Sources/ReaderCore/DesignSystem` | Design tokens and shared styling |
+| `Packages/ReaderCore/Tests/ReaderCoreTests` | Package tests, localization checks and the vendored contract fixtures |
+
+The remote theme repository defaults to the official GitHub Pages index. A
+build can override it with the `BlankGrimoireThemesRepositoryURL` key in
+[`BlankGrimoire/Info.plist`](BlankGrimoire/Info.plist) without changing code.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+
+## SDK runtime
+
+`runtime.js` and the contract fixtures are vendored from
+[BlankGrimoire-sdk](https://github.com/BlankGrimoire/BlankGrimoire-sdk).
+[`.sdk-version`](.sdk-version) records the pinned release and
+[`sdk-assets.sha256`](sdk-assets.sha256) its checksums.
+
+```bash
+make sync-sdk                            # from a local checkout (../BlankGrimoire-sdk)
+make sync-sdk-release                    # from the GitHub release for .sdk-version
+make verify-sdk                          # re-check the vendored files
+```
+
+`make sync-sdk` never changes the pinned version unless you pass
+`SDK_VERSION=<version>`. Update `.sdk-version`, run `make sync-sdk-release`,
+commit the generated files and the pin together. The release sync verifies the
+downloaded files against the recorded checksums when the pin is unchanged;
+after a version bump it records new checksums from the release assets, so
+review the diff before committing.
 
 ## Related repositories
 
