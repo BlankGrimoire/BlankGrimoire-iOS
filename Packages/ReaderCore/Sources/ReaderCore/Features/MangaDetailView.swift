@@ -352,6 +352,17 @@
 
                     Spacer()
 
+                    if let resumeChapter = viewModel.resumeChapter {
+                        Button {
+                            readerRoute = ReaderRoute(chapter: resumeChapter)
+                        } label: {
+                            Label("Resume", systemImage: "play.fill")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+
                     if viewModel.isLoadingChapters {
                         ProgressView()
                             .controlSize(.small)
@@ -445,10 +456,13 @@
             .task {
                 await viewModel.loadChapters()
             }
-            .sheet(item: $readerRoute) { route in
-                NavigationStack {
-                    ReaderView(manga: manga, chapter: route.chapter, dependencies: dependencies)
-                }
+            .fullScreenCover(item: $readerRoute) { route in
+                ReaderView(
+                    manga: manga,
+                    chapter: route.chapter,
+                    chapters: viewModel.chapters,
+                    dependencies: dependencies
+                )
             }
             .onChange(of: viewModel.challengeURL) { _, url in
                 guard let url else { return }

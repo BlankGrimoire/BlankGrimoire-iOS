@@ -48,7 +48,8 @@
                     url: url,
                     allowedHosts: allowedHosts,
                     isLoading: $isLoading,
-                    errorMessage: $errorMessage
+                    errorMessage: $errorMessage,
+                    onVerified: { finish(.completed) }
                 )
                 .overlay {
                     if isLoading {
@@ -110,6 +111,7 @@
         let allowedHosts: Set<String>
         @Binding var isLoading: Bool
         @Binding var errorMessage: String?
+        let onVerified: () -> Void
 
         func makeCoordinator() -> Coordinator {
             Coordinator(parent: self)
@@ -117,6 +119,7 @@
 
         func makeUIView(context: Context) -> WKWebView {
             let webView = WKWebView(frame: .zero)
+            webView.customUserAgent = UserAgent.default
             webView.navigationDelegate = context.coordinator
             context.coordinator.startObservingCookies(of: webView)
             webView.load(URLRequest(url: url))
@@ -165,16 +168,19 @@
                 syncCookies(from: cookieStore)
             }
 
-            private func syncCookies(from store: WKHTTPCookieStore) {
+            private func syncCookies(from store: WKHTTPCookieStore, completion: (() -> Void)? = nil) {
                 store.getAllCookies { [weak self] cookies in
-                    guard let self else { return }
+                    guard let self else {
+                        completion?()
+                        return
+                    }
                     let allowed = cookies.filter { cookie in
                         self.parent.isAllowed(host: cookie.domain)
                     }
-                    guard !allowed.isEmpty else { return }
                     for cookie in allowed {
                         ChallengeCookieStore.shared.store([cookie], forHost: cookie.domain)
                     }
+                    completion?()
                 }
             }
 
@@ -186,6 +192,31 @@
 
             func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
                 parent.isLoading = false
+                // Challenge pages carry specific markers. Only close once they
+                // disappear, so a site page that merely renders a captcha
+                // widget is not mistaken for a solved challenge.
+                let script = """
+                    (() => {
+                      const html = (document.documentElement && document.documentElement.outerHTML || '').toLowerCase();
+                      return html.includes('cf-chl-')
+                        || html.includes('challenge-platform')
+                        || html.includes('just a moment')
+                        || html.includes('enable javascript and cookies');
+                    })()
+                    """
+                webView.evaluateJavaScript(script) { [weak self] result, _ in
+                    guard let self else { return }
+                    guard let number = result as? NSNumber, !number.boolValue else { return }
+                    guard let store = self.cookieStore else {
+                        self.parent.onVerified()
+                        return
+                    }
+                    // Persist any cookie the challenge set before the caller
+                    // retries, otherwise the retry may start without it.
+                    self.syncCookies(from: store) {
+                        self.parent.onVerified()
+                    }
+                }
             }
 
             func webView(
@@ -259,7 +290,9 @@
             guard !host.isEmpty else { return false }
             return allowedHosts.contains { pattern in
                 let pattern = pattern.lowercased()
-                return host == pattern || host.hasSuffix("." + pattern)
+                return host == pattern
+                    || host.hasSuffix("." + pattern)
+                    || pattern.hasSuffix("." + host)
             }
         }
     }

@@ -157,6 +157,9 @@
             nextPageURLs = outcome.nextPageURLs
             hasMoreResults = outcome.hasMore
             hasSearched = true
+            if let challengeURL = outcome.challengeURL {
+                lastError = SiteBrowsingError.challengeRequired(challengeURL)
+            }
             await refreshImportedIDs()
         }
 
@@ -204,6 +207,9 @@
             failures.append(contentsOf: next.failures.filter { failedSites.insert($0.siteProfileID).inserted })
             nextPageURLs = next.nextPageURLs
             hasMoreResults = next.hasMore
+            if let challengeURL = next.challengeURL {
+                lastError = SiteBrowsingError.challengeRequired(challengeURL)
+            }
             await refreshImportedIDs()
         }
 
@@ -265,6 +271,7 @@
         private let dependencies: FeaturesDependencies
         @State private var viewModel: SiteSearchViewModel
         @State private var challengeRoute: ChallengeRoute?
+        @State private var selectedResult: SiteSearchResult?
 
         public init(dependencies: FeaturesDependencies) {
             self.dependencies = dependencies
@@ -303,7 +310,17 @@
             }
             .navigationTitle("Browse")
             .searchable(
-                text: $viewModel.query,
+                text: Binding(
+                    get: { viewModel.query },
+                    set: { newValue in
+                        viewModel.query = newValue
+                        // A title query and a genre filter are mutually
+                        // exclusive: typing replaces the selected genre.
+                        if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            viewModel.selectedGenre = nil
+                        }
+                    }
+                ),
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search all sites"
             )
@@ -331,20 +348,24 @@
                 guard viewModel.hasSearched else { return }
                 Task { await viewModel.search() }
             }
-            .onChange(of: viewModel.selectedGenre) {
-                guard viewModel.hasSearched else { return }
+            .onChange(of: viewModel.selectedGenre) { _, newGenre in
+                // Only a genre selection starts a search automatically;
+                // clearing the genre while typing must not fire one.
+                guard viewModel.hasSearched, newGenre != nil else { return }
                 Task { await viewModel.search() }
             }
             .onChange(of: viewModel.challengeURL) { _, url in
                 guard let url else { return }
-                let hosts = Set(
-                    viewModel.sites.compactMap { URL(string: $0.baseURL)?.host?.lowercased() }
-                ).filter { host in
-                    url.host?.lowercased() == host
-                        || url.host?.lowercased().hasSuffix("." + host) == true
-                }
+                let hosts = challengeHosts(for: url)
                 guard !hosts.isEmpty else { return }
-                challengeRoute = ChallengeRoute(url: url, allowedHosts: Set(hosts))
+                challengeRoute = ChallengeRoute(url: url, allowedHosts: hosts)
+            }
+            .navigationDestination(item: $selectedResult) { result in
+                SearchResultDetailView(
+                    result: result,
+                    alreadyImported: viewModel.importedIDs.contains(result.id),
+                    dependencies: dependencies
+                )
             }
             .sheet(item: $challengeRoute) { route in
                 ChallengeView(
@@ -352,9 +373,9 @@
                     allowedHosts: route.allowedHosts,
                     onFinish: { outcome in
                         challengeRoute = nil
-                        if outcome == .completed {
-                            viewModel.lastError = nil
-                        }
+                        guard outcome == .completed else { return }
+                        viewModel.lastError = nil
+                        Task { await viewModel.search() }
                     }
                 )
             }
@@ -400,7 +421,19 @@
                 }
 
                 Section {
-                    Picker("Genere", selection: $viewModel.selectedGenre) {
+                    Picker(
+                        "Genere",
+                        selection: Binding(
+                            get: { viewModel.selectedGenre },
+                            set: { newValue in
+                                viewModel.selectedGenre = newValue
+                                // Selecting a genre replaces the title query.
+                                if newValue != nil {
+                                    viewModel.query = ""
+                                }
+                            }
+                        )
+                    ) {
                         Text("Tutti i generi").tag(String?.none)
                         ForEach(viewModel.unifiedGenres) { genre in
                             HStack {
@@ -413,6 +446,13 @@
                         }
                     }
                     .pickerStyle(.menu)
+
+                    Label(
+                        "The genre filter replaces the title search: use one or the other.",
+                        systemImage: "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 if !viewModel.results.isEmpty {
@@ -476,28 +516,44 @@
             }
         }
 
+        private func challengeHosts(for url: URL) -> Set<String> {
+            guard let host = url.host?.lowercased() else { return [] }
+            let candidates = viewModel.sites.compactMap {
+                URL(string: $0.baseURL)?.host?.lowercased()
+            }
+            return Set(candidates.filter { host == $0 || host.hasSuffix("." + $0) })
+        }
+
         private func resultRow(_ result: SiteSearchResult) -> some View {
             HStack(spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(
-                    url: result.coverURL,
-                    loader: dependencies.imageLoader,
-                    siteBaseURL: result.siteURL
-                )
-                .frame(width: 56, height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+                Button {
+                    selectedResult = result
+                } label: {
+                    HStack(spacing: DesignTokens.Spacing.md) {
+                        MangaCoverImage(
+                            url: result.coverURL,
+                            loader: dependencies.imageLoader,
+                            siteBaseURL: result.siteURL
+                        )
+                        .frame(width: 56, height: 80)
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
 
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text(result.title)
-                        .font(Typography.body.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                            Text(result.title)
+                                .font(Typography.body.weight(.medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
 
-                    Text(result.siteName)
-                        .font(Typography.caption1)
-                        .foregroundStyle(.secondary)
+                            Text(result.siteName)
+                                .font(Typography.caption1)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: DesignTokens.Spacing.sm)
+                    }
+                    .contentShape(Rectangle())
                 }
-
-                Spacer(minLength: DesignTokens.Spacing.sm)
+                .buttonStyle(.plain)
 
                 importButton(for: result)
             }

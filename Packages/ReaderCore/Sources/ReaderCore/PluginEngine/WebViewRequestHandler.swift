@@ -112,6 +112,7 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
         }
 
         webView = WKWebView(frame: .zero, configuration: config)
+        webView?.customUserAgent = UserAgent.default
         webView?.navigationDelegate = self
         cookieStore.add(self)
 

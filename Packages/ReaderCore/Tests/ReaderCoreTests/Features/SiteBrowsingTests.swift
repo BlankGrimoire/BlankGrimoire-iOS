@@ -280,6 +280,24 @@ final class SiteCatalogServiceTests: XCTestCase {
         XCTAssertEqual(chapter.pageCount, 12)
         XCTAssertTrue(chapter.isDownloaded)
     }
+
+    func testSearchFailureExposesTheChallengeURL() {
+        let challenge = URL(string: "https://example.org/verify")!
+        let outcome = SiteSearchOutcome(
+            failures: [
+                SiteSearchFailure(
+                    siteProfileID: "site-a",
+                    siteName: "Example",
+                    message: "verification required",
+                    challengeURL: challenge
+                )
+            ]
+        )
+
+        XCTAssertEqual(outcome.challengeURL, challenge)
+        XCTAssertTrue(outcome.results.isEmpty)
+        XCTAssertFalse(outcome.hasMore)
+    }
 }
 
 @MainActor

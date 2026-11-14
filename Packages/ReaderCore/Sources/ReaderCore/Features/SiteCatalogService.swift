@@ -314,11 +314,20 @@ public final class SiteCatalogService: SiteCatalogProviding {
                 level: 2,
                 context: nil
             )
+            let challengeURL: URL?
+            if let browsingError = error as? SiteBrowsingError,
+                case .challengeRequired(let url) = browsingError
+            {
+                challengeURL = url
+            } else {
+                challengeURL = nil
+            }
             return .failure(
                 SiteSearchFailure(
                     siteProfileID: profile.id,
                     siteName: profile.name,
-                    message: error.localizedDescription
+                    message: error.localizedDescription,
+                    challengeURL: challengeURL
                 )
             )
         }
@@ -531,6 +540,37 @@ public final class SiteCatalogService: SiteCatalogProviding {
         return manga
     }
 
+    /// Loads details and chapters for a search hit without persisting it.
+    public func fetchDetails(_ result: SiteSearchResult) async throws -> SiteSearchDetails {
+        guard let profile = try await siteProfileRepository.fetch(id: result.siteProfileID) else {
+            throw SiteBrowsingError.siteProfileNotFound(result.siteProfileID)
+        }
+
+        let lease = try await sessionPool.acquire(
+            profile: profile,
+            adapterStore: adapterStore,
+            bridgeFactory: bridgeFactory,
+            runtimeFactory: runtimeFactory
+        )
+        defer { lease.release() }
+        let session = lease.session
+
+        guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
+            throw SiteBrowsingError.invalidSiteURL(result.key)
+        }
+        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
+        let context = PluginPageContext(
+            html: html,
+            baseURL: detailsURL.absoluteString,
+            siteName: profile.name,
+            overrides: profile.selectorOverrides
+        )
+
+        let details = try await session.runtime.details(for: result.key, in: context)
+        let chapters = try await session.runtime.chapters(for: result.key, in: context)
+        return SiteSearchDetails(details: details, chapters: chapters)
+    }
+
     /// Refreshes details and chapter list for an already imported series.
     ///
     /// The local library stays usable when the site is unreachable: the caller
@@ -670,6 +710,9 @@ public final class SiteCatalogService: SiteCatalogProviding {
         do {
             let response = try await session.bridge.hybridRequest(
                 HttpRequest(url: url.absoluteString), siteProfile: profile)
+            if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
+                throw SiteBrowsingError.challengeRequired(url)
+            }
             guard (200...299).contains(response.status) else {
                 throw SiteBrowsingError.searchFailed("HTTP \(response.status)")
             }

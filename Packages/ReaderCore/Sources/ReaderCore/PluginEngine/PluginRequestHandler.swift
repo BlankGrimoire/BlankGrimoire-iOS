@@ -151,6 +151,7 @@ public actor PluginRequestHandler {
         try validateHost(url)
 
         var urlRequest = URLRequest(url: url)
+        urlRequest.setValue(UserAgent.default, forHTTPHeaderField: "User-Agent")
         urlRequest.httpMethod = request.method.uppercased()
         applyHeaders(request.headers, to: &urlRequest)
 
@@ -671,8 +672,13 @@ public final class PluginBridge: @unchecked Sendable {
                 let url = URL(string: httpRequest.url)
             {
 
-                // Site supports WebView mode? Try automatic resolution
-                if siteProfile.usesWebViewMode {
+                // Prefer the hidden web view when the site opts in, or when a
+                // visible verification already left cookies for this host: the
+                // web view shares them and can finish the challenge silently.
+                let challengeHost = url.host?.lowercased() ?? ""
+                let hasChallengeCookies =
+                    !ChallengeCookieStore.shared.cookies(forHost: challengeHost).isEmpty
+                if siteProfile.usesWebViewMode || hasChallengeCookies {
                     logger.log(
                         "Native request hit challenge, trying WebView mode for \(url.host ?? "unknown")", level: 0,
                         context: nil)

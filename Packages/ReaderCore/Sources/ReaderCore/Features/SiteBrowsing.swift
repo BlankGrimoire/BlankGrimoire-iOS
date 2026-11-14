@@ -3,7 +3,7 @@
 import Foundation
 
 /// One search hit coming from a configured site profile.
-public struct SiteSearchResult: Identifiable, Sendable, Equatable {
+public struct SiteSearchResult: Identifiable, Sendable, Hashable {
     public let siteProfileID: String
     public let siteName: String
     public let siteURL: String
@@ -37,13 +37,21 @@ public struct SiteSearchFailure: Identifiable, Sendable, Equatable {
     public let siteProfileID: String
     public let siteName: String
     public let message: String
+    /// Set when the site answered with a verification page instead of results.
+    public let challengeURL: URL?
 
     public var id: String { siteProfileID }
 
-    public init(siteProfileID: String, siteName: String, message: String) {
+    public init(
+        siteProfileID: String,
+        siteName: String,
+        message: String,
+        challengeURL: URL? = nil
+    ) {
         self.siteProfileID = siteProfileID
         self.siteName = siteName
         self.message = message
+        self.challengeURL = challengeURL
     }
 }
 
@@ -60,6 +68,14 @@ public struct SiteSearchOutcome: Sendable, Equatable {
     /// Whether at least one site has another result page.
     public var hasMore: Bool { !nextPageURLs.isEmpty }
 
+    /// Verification URL surfaced by a site during this search, if any.
+    ///
+    /// The browse screen presents the challenge browser for this URL so the
+    /// user can complete the verification and retry.
+    public var challengeURL: URL? {
+        failures.compactMap(\.challengeURL).first
+    }
+
     public init(
         results: [SiteSearchResult] = [],
         failures: [SiteSearchFailure] = [],
@@ -68,6 +84,20 @@ public struct SiteSearchOutcome: Sendable, Equatable {
         self.results = results
         self.failures = failures
         self.nextPageURLs = nextPageURLs
+    }
+}
+
+/// Details and chapters for a search hit, fetched without importing it.
+///
+/// The browse screen uses this to preview a series before the user decides to
+/// add it to the library.
+public struct SiteSearchDetails: Sendable {
+    public let details: MangaDetails
+    public let chapters: [Chapter]
+
+    public init(details: MangaDetails, chapters: [Chapter]) {
+        self.details = details
+        self.chapters = chapters
     }
 }
 
@@ -93,6 +123,10 @@ public protocol SiteCatalogProviding: Sendable {
         in profiles: [SiteProfile],
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome
+    /// Loads details and chapters for a search hit without persisting them.
+    ///
+    /// The browse screen uses this to preview a series before importing it.
+    func fetchDetails(_ result: SiteSearchResult) async throws -> SiteSearchDetails
     func importManga(_ result: SiteSearchResult) async throws -> MangaEntity
     /// Refreshes details and chapters for an imported series from its site.
     func refreshChapters(for manga: MangaEntity) async throws
@@ -118,6 +152,11 @@ extension SiteCatalogProviding {
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome {
         SiteSearchOutcome()
+    }
+
+    /// Catalogs that do not preview search hits report the feature as absent.
+    public func fetchDetails(_ result: SiteSearchResult) async throws -> SiteSearchDetails {
+        throw SiteBrowsingError.catalogUnavailable
     }
 
     public func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter] {
