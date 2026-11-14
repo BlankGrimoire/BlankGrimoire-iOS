@@ -100,7 +100,7 @@ struct EndToEndTests {
         #expect(detectedB.score >= detectedB.theme.detectionSignature.minScore)
 
         // 4. Cross-site search returns one result per site.
-        let outcome = await catalog.search(query: "lorem", in: [profileA, profileB])
+        let outcome = await catalog.search(SearchQuery(text: "lorem", page: 1), in: [profileA, profileB])
         #expect(outcome.failures.isEmpty)
         #expect(outcome.results.count == 2)
 

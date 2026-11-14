@@ -15,6 +15,7 @@ private struct AdapterBundleInspection: Decodable {
     let apiVersion: Int
     let detectionSignature: ThemeSignature
     let selectors: ThemeSelectors
+    let referrerHeaders: [String: String]?
 }
 
 // MARK: - Adapter Store Errors
@@ -515,12 +516,14 @@ public final class DefaultAdapterStore: AdapterStore {
         )
 
         // 6. Store bundle
+        let referrerHeaders = verified.manifest.referrerHeaders ?? [:]
         let themeAdapter = ThemeAdapter(
             id: verified.manifest.id,
             name: verified.manifest.name,
             version: verified.manifest.version,
             detectionSignature: verified.manifest.detectionSignature,
-            selectors: verified.selectors
+            selectors: verified.selectors,
+            referrerHeaders: referrerHeaders
         )
         let bundle = AdapterBundle(
             manifest: verified.manifest,
@@ -764,7 +767,8 @@ public final class DefaultAdapterStore: AdapterStore {
             version: inspection.version,
             apiVersion: inspection.apiVersion,
             detectionSignature: inspection.detectionSignature,
-            sha256: sha256
+            sha256: sha256,
+            referrerHeaders: inspection.referrerHeaders ?? [:]
         )
         return (manifest, inspection.selectors)
     }
@@ -814,6 +818,9 @@ public final class InstalledAdapterEntity {
     @Attribute(.externalStorage) public var bundleData: Data
     public var sourceRepositoryURL: String
     public var installedAt: Date
+    /// Theme-declared CDN referrer map, stored as JSON so a restart keeps it.
+    /// Optional so existing stores migrate without losing installed adapters.
+    public var referrerHeadersJSON: String?
 
     public init(bundle: AdapterBundle) {
         self.id = bundle.id
@@ -826,23 +833,27 @@ public final class InstalledAdapterEntity {
         self.bundleData = bundle.bundleData
         self.sourceRepositoryURL = bundle.sourceRepositoryURL
         self.installedAt = bundle.installedAt
+        self.referrerHeadersJSON = Self.encodeReferrerHeaders(bundle.themeAdapter.referrerHeaders)
     }
 
     public func toAdapterBundle() -> AdapterBundle {
+        let referrerHeaders = Self.decodeReferrerHeaders(referrerHeadersJSON)
         let manifest = AdapterManifest(
             id: id,
             name: name,
             version: version,
             apiVersion: apiVersion,
             detectionSignature: detectionSignature,
-            sha256: sha256
+            sha256: sha256,
+            referrerHeaders: referrerHeaders
         )
         let themeAdapter = ThemeAdapter(
             id: id,
             name: name,
             version: version,
             detectionSignature: detectionSignature,
-            selectors: themeSelectors
+            selectors: themeSelectors,
+            referrerHeaders: referrerHeaders
         )
         return AdapterBundle(
             manifest: manifest,
@@ -851,6 +862,24 @@ public final class InstalledAdapterEntity {
             sourceRepositoryURL: sourceRepositoryURL,
             installedAt: installedAt
         )
+    }
+
+    private static func encodeReferrerHeaders(_ headers: [String: String]) -> String? {
+        guard !headers.isEmpty,
+            let data = try? JSONEncoder().encode(headers)
+        else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decodeReferrerHeaders(_ json: String?) -> [String: String] {
+        guard let json, let data = json.data(using: .utf8),
+            let headers = try? JSONDecoder().decode([String: String].self, from: data)
+        else {
+            return [:]
+        }
+        return headers
     }
 }
 

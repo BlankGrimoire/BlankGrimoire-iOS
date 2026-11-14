@@ -32,6 +32,7 @@ extension MangaDetails {
             artists: artists ?? [],
             synopsis: synopsis,
             tags: tags ?? [],
+            genres: genres ?? [],
             status: status,
             contentRating: contentRating,
             isFavorite: isFavorite
@@ -47,6 +48,7 @@ extension MangaDetails {
         entity.artists = artists ?? []
         entity.synopsis = synopsis
         entity.tags = tags ?? []
+        entity.genres = genres ?? []
         entity.status = status
         entity.contentRating = contentRating
         entity.updatedAt = Date()

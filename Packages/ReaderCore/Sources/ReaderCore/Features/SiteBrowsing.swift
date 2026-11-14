@@ -74,29 +74,59 @@ public struct SiteSearchOutcome: Sendable, Equatable {
 /// Cross-site catalog operations used by the browse screen.
 @MainActor
 public protocol SiteCatalogProviding: Sendable {
-    func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome
+    func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome
+    /// Search with the per-site genre value chosen from a unified genre.
+    ///
+    /// Sites may use different slugs for the same display name, so the
+    /// caller passes the value extracted from each site's own genre list.
+    func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome
     /// Loads the next result page for the sites that announced one.
     ///
     /// Pass the previous outcome: implementations use its `nextPageURLs` to
     /// fetch the following page without repeating the earlier requests.
     func searchNextPage(
-        query: String,
+        query: SearchQuery,
         in profiles: [SiteProfile],
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome
     func importManga(_ result: SiteSearchResult) async throws -> MangaEntity
     /// Refreshes details and chapters for an imported series from its site.
     func refreshChapters(for manga: MangaEntity) async throws
+    /// Extracts the list of genre filters available on a site.
+    func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter]
+    /// Extracts and unifies genres across multiple sites (case-insensitive merge).
+    func fetchUnifiedGenres(for profiles: [SiteProfile]) async -> [UnifiedGenre]
 }
 
 extension SiteCatalogProviding {
+    public func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome {
+        await search(query, in: profiles)
+    }
+
     /// Catalogs that do not paginate report that no further page exists.
     public func searchNextPage(
-        query: String,
+        query: SearchQuery,
         in profiles: [SiteProfile],
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome {
         SiteSearchOutcome()
+    }
+
+    public func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter] {
+        throw SiteBrowsingError.catalogUnavailable
+    }
+
+    public func fetchUnifiedGenres(for profiles: [SiteProfile]) async -> [UnifiedGenre] {
+        // Default implementation returns empty array - conforming types should override
+        return []
     }
 }
 

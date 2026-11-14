@@ -55,20 +55,29 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     // MARK: - Search
 
-    public func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
-        await runSearch(query: query, profiles: profiles, startURLs: nil)
+    public func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
+        await runSearch(query: query, profiles: profiles, startURLs: nil, genreValues: [:])
+    }
+
+    public func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome {
+        await runSearch(query: query, profiles: profiles, startURLs: nil, genreValues: genreValues)
     }
 
     public func searchNextPage(
-        query: String,
+        query: SearchQuery,
         in profiles: [SiteProfile],
-        continuingFrom outcome: SiteSearchOutcome
+        continuingFrom outcome: SiteSearchOutcome,
+        genreValues: [String: String] = [:]
     ) async -> SiteSearchOutcome {
         let startURLs = outcome.nextPageURLs
         guard !startURLs.isEmpty else {
             return SiteSearchOutcome()
         }
-        return await runSearch(query: query, profiles: profiles, startURLs: startURLs)
+        return await runSearch(query: query, profiles: profiles, startURLs: startURLs, genreValues: genreValues)
     }
 
     /// Shared implementation for the first page and the follow-up pages.
@@ -77,12 +86,13 @@ public final class SiteCatalogService: SiteCatalogProviding {
     /// from its theme. For a follow-up page it holds the URL extracted from
     /// each site's own "next" link.
     private func runSearch(
-        query: String,
+        query: SearchQuery,
         profiles: [SiteProfile],
-        startURLs: [String: String]?
+        startURLs: [String: String]?,
+        genreValues: [String: String]
     ) async -> SiteSearchOutcome {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        let trimmed = query.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty || !(query.genres?.isEmpty ?? true) else {
             return SiteSearchOutcome()
         }
 
@@ -120,11 +130,15 @@ public final class SiteCatalogService: SiteCatalogProviding {
                             )
                         )
                     }
+                    let genreValue =
+                        genreValues[profile.id]
+                        ?? (genreValues.isEmpty ? query.genres?.first : nil)
                     return await self.searchWithTimeout(
                         profile: profile,
-                        query: trimmed,
+                        query: query,
                         page: pageNumber,
-                        startURL: startURLs?[profile.id]
+                        startURL: startURLs?[profile.id],
+                        genreValue: genreValue
                     )
                 }
             }
@@ -156,11 +170,15 @@ public final class SiteCatalogService: SiteCatalogProviding {
                                 )
                             )
                         }
+                        let genreValue =
+                            genreValues[profile.id]
+                            ?? (genreValues.isEmpty ? query.genres?.first : nil)
                         return await self.searchWithTimeout(
                             profile: profile,
-                            query: trimmed,
+                            query: query,
                             page: pageNumber,
-                            startURL: startURLs?[profile.id]
+                            startURL: startURLs?[profile.id],
+                            genreValue: genreValue
                         )
                     }
                 }
@@ -190,14 +208,21 @@ public final class SiteCatalogService: SiteCatalogProviding {
     /// A site that never answers must not block the cross-site results.
     private func searchWithTimeout(
         profile: SiteProfile,
-        query: String,
+        query: SearchQuery,
         page: Int,
         startURL: String?,
+        genreValue: String?,
         timeout: Duration = .seconds(20)
     ) async -> SiteSearchSiteOutcome {
         await withTaskGroup(of: SiteSearchSiteOutcome?.self) { group in
             group.addTask {
-                await self.search(profile: profile, query: query, page: page, startURL: startURL)
+                await self.search(
+                    profile: profile,
+                    query: query,
+                    page: page,
+                    startURL: startURL,
+                    genreValue: genreValue
+                )
             }
             group.addTask {
                 try? await Task.sleep(for: timeout)
@@ -220,9 +245,10 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     private func search(
         profile: SiteProfile,
-        query: String,
+        query: SearchQuery,
         page: Int,
-        startURL: String?
+        startURL: String?,
+        genreValue: String?
     ) async -> SiteSearchSiteOutcome {
         do {
             let lease = try await sessionPool.acquire(
@@ -238,9 +264,14 @@ public final class SiteCatalogService: SiteCatalogProviding {
             if let startURL, let url = URL(string: startURL) {
                 searchURL = url
             } else {
-                searchURL = try makeSearchURL(profile: profile, bundle: session.bundle, query: query)
+                searchURL = try makeSearchURL(
+                    profile: profile,
+                    bundle: session.bundle,
+                    query: query,
+                    genreValue: genreValue
+                )
             }
-            let html = try await fetchHTML(searchURL, session: session)
+            let html = try await fetchHTML(searchURL, session: session, profile: profile)
             let context = PluginPageContext(
                 html: html,
                 baseURL: searchURL.absoluteString,
@@ -248,7 +279,12 @@ public final class SiteCatalogService: SiteCatalogProviding {
                 overrides: profile.selectorOverrides
             )
             let resultPage = try await session.runtime.search(
-                SearchQuery(text: query, page: page),
+                SearchQuery(
+                    text: query.text,
+                    page: page,
+                    filters: query.filters,
+                    genres: query.genres
+                ),
                 in: context
             )
             let results = resultPage.items.map { summary in
@@ -288,18 +324,34 @@ public final class SiteCatalogService: SiteCatalogProviding {
         }
     }
 
-    private func makeSearchURL(profile: SiteProfile, bundle: AdapterBundle, query: String) throws -> URL {
+    private func makeSearchURL(
+        profile: SiteProfile,
+        bundle: AdapterBundle,
+        query: SearchQuery,
+        genreValue: String?
+    ) throws -> URL {
         guard let baseURL = URL(string: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
         }
 
+        let text = query.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let genre = genreValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // A selected genre has its own discovery URL, which is independent
+        // from the free-text search path.
+        if let genre, !genre.isEmpty,
+            let genreURL = try makeGenreURL(profile: profile, bundle: bundle, genre: genre, baseURL: baseURL)
+        {
+            return genreURL
+        }
+
         let path = profile.selectorOverrides.search?.path ?? bundle.themeAdapter.selectors.search.path
         let encodedQuery =
-            query.addingPercentEncoding(
+            text.addingPercentEncoding(
                 withAllowedCharacters: CharacterSet.urlQueryAllowed.subtracting(
                     CharacterSet(charactersIn: "&=?#")
                 )
-            ) ?? query
+            ) ?? text
 
         if path.contains("{query}") {
             let expanded = path.replacingOccurrences(of: "{query}", with: encodedQuery)
@@ -324,7 +376,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         var items = components.queryItems ?? []
         let parameterName = items.first { $0.value?.isEmpty != false }?.name ?? "q"
         items.removeAll { $0.name == parameterName }
-        items.append(URLQueryItem(name: parameterName, value: query))
+        items.append(URLQueryItem(name: parameterName, value: text))
         components.queryItems = items
         // URLComponents leaves `+` as-is in query values, but servers decode it
         // as a space; force the percent-encoded form (`C++` -> `C%2B%2B`).
@@ -333,6 +385,71 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
         guard let url = components.url else {
             throw SiteBrowsingError.invalidSearchURL(path)
+        }
+        try validateSameSite(url, profile: profile)
+        return url
+    }
+
+    /// Builds the URL used when the user filters by a genre.
+    ///
+    /// `filterPath` takes precedence (`/genre/{genre}`); when it has no
+    /// placeholder the genre is appended as the configured query parameter.
+    /// Returns nil when the adapter does not declare a genre filter, so the
+    /// caller can fall back to the normal text search.
+    private func makeGenreURL(
+        profile: SiteProfile,
+        bundle: AdapterBundle,
+        genre: String,
+        baseURL: URL
+    ) throws -> URL? {
+        guard let genreSelectors = bundle.themeAdapter.selectors.genre else {
+            return nil
+        }
+
+        let encodedGenre =
+            genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? genre
+
+        if let filterPath = genreSelectors.filterPath, !filterPath.isEmpty {
+            if filterPath.contains("{genre}") {
+                let expanded = filterPath.replacingOccurrences(of: "{genre}", with: encodedGenre)
+                guard let url = URL(string: expanded, relativeTo: baseURL)?.absoluteURL else {
+                    throw SiteBrowsingError.invalidSearchURL(filterPath)
+                }
+                try validateSameSite(url, profile: profile)
+                return url
+            }
+
+            let parameter = genreSelectors.filterParam ?? "genre"
+            guard
+                var components = URLComponents(
+                    url: URL(string: filterPath, relativeTo: baseURL)?.absoluteURL ?? baseURL,
+                    resolvingAgainstBaseURL: false
+                )
+            else {
+                throw SiteBrowsingError.invalidSearchURL(filterPath)
+            }
+            var items = components.queryItems ?? []
+            items.removeAll { $0.name == parameter }
+            items.append(URLQueryItem(name: parameter, value: genre))
+            components.queryItems = items
+            guard let url = components.url else {
+                throw SiteBrowsingError.invalidSearchURL(filterPath)
+            }
+            try validateSameSite(url, profile: profile)
+            return url
+        }
+
+        guard let parameter = genreSelectors.filterParam, !parameter.isEmpty,
+            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        else {
+            return nil
+        }
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == parameter }
+        items.append(URLQueryItem(name: parameter, value: genre))
+        components.queryItems = items
+        guard let url = components.url else {
+            throw SiteBrowsingError.invalidSearchURL(baseURL.absoluteString)
         }
         try validateSameSite(url, profile: profile)
         return url
@@ -400,7 +517,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(result.key)
         }
-        let html = try await fetchHTML(detailsURL, session: session)
+        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -436,7 +553,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(key)
         }
-        let html = try await fetchHTML(detailsURL, session: session)
+        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -549,15 +666,108 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     // MARK: - Networking
 
-    private func fetchHTML(_ url: URL, session: AdapterSession) async throws -> String {
-        let response = try await session.bridge.request(HttpRequest(url: url.absoluteString))
-        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
-            throw SiteBrowsingError.challengeRequired(url)
+    private func fetchHTML(_ url: URL, session: AdapterSession, profile: SiteProfile) async throws -> String {
+        do {
+            let response = try await session.bridge.hybridRequest(
+                HttpRequest(url: url.absoluteString), siteProfile: profile)
+            guard (200...299).contains(response.status) else {
+                throw SiteBrowsingError.searchFailed("HTTP \(response.status)")
+            }
+            return response.body
+        } catch let error as PluginEngineError {
+            if case .challengeRequired(let challengeURL) = error {
+                throw SiteBrowsingError.challengeRequired(challengeURL)
+            }
+            throw error
         }
-        guard (200...299).contains(response.status) else {
-            throw SiteBrowsingError.searchFailed("HTTP \(response.status)")
+    }
+
+    // MARK: - Genre Filtering
+
+    public func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter] {
+        let lease = try await sessionPool.acquire(
+            profile: profile,
+            adapterStore: adapterStore,
+            bridgeFactory: bridgeFactory,
+            runtimeFactory: runtimeFactory
+        )
+        defer { lease.release() }
+        let session = lease.session
+
+        guard let genreSelectors = session.bundle.themeAdapter.selectors.genre else {
+            return []
         }
-        return response.body
+
+        // Convert ThemeSelectors.GenreSelectors to GenreMapping
+        let genreMapping = GenreMapping(
+            source: genreSelectors.source,
+            displayNameAttr: genreSelectors.displayNameAttr,
+            valueAttr: genreSelectors.valueAttr,
+            valuePattern: genreSelectors.valuePattern,
+            filterParam: genreSelectors.filterParam
+        )
+
+        let genresURL = try makeGenresURL(profile: profile, bundle: session.bundle)
+        let html = try await self.fetchHTML(genresURL, session: session, profile: profile)
+
+        let context = PluginPageContext(
+            html: html,
+            baseURL: genresURL.absoluteString,
+            siteName: profile.name,
+            overrides: profile.selectorOverrides
+        )
+
+        let result = try await session.runtime.extractGenres(
+            mapping: genreMapping,
+            in: context
+        )
+        return result.filters
+    }
+
+    public func fetchUnifiedGenres(for profiles: [SiteProfile]) async -> [UnifiedGenre] {
+        var genreMap: [String: [String: SiteGenreFilter]] = [:]
+
+        await withTaskGroup(of: (String, [SiteGenreFilter]).self) { group in
+            for profile in profiles.filter(\.isEnabled) {
+                group.addTask { @Sendable in
+                    do {
+                        let filters = try await self.fetchGenres(for: profile)
+                        return (profile.id, filters)
+                    } catch {
+                        return (profile.id, [])
+                    }
+                }
+            }
+
+            for await (siteProfileID, filters) in group {
+                for filter in filters {
+                    let key = filter.displayName.lowercased()
+                    genreMap[key, default: [:]][siteProfileID] = filter
+                }
+            }
+        }
+
+        return genreMap.map { (key, siteFilters) in
+            UnifiedGenre(
+                displayName: siteFilters.values.first?.displayName ?? key.capitalized,
+                siteFilters: siteFilters
+            )
+        }.sorted { $0.displayName < $1.displayName }
+    }
+
+    private func makeGenresURL(profile: SiteProfile, bundle: AdapterBundle) throws -> URL {
+        guard let baseURL = URL(string: profile.baseURL) else {
+            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
+        }
+
+        // `source` is a CSS selector, so the page that lists the genres is
+        // declared separately. Default to the site root. Never probe a
+        // hardcoded list of genre paths: the adapter decides where they live.
+        let pagePath = bundle.themeAdapter.selectors.genre?.pagePath ?? "/"
+        if let url = URL(string: pagePath, relativeTo: baseURL)?.absoluteURL {
+            return url
+        }
+        return baseURL
     }
 }
 

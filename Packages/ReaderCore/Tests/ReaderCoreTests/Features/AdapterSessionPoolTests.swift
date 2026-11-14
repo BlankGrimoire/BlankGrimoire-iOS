@@ -195,6 +195,11 @@ private struct CountingRuntime: SiteAdapterRuntime {
         in page: PluginPageContext
     ) async throws -> [Page] { [] }
 
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres { .init(filters: []) }
+
     func dispose() async {
         counter.markDisposed()
     }

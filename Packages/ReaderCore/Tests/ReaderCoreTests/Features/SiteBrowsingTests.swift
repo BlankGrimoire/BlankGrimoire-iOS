@@ -27,7 +27,7 @@ final class SiteCatalogServiceTests: XCTestCase {
             }
         )
 
-        let outcome = await service.search(query: "lorem ipsum", in: profiles)
+        let outcome = await service.search(SearchQuery(text: "lorem ipsum", page: 1), in: profiles)
 
         XCTAssertEqual(outcome.results.map(\.title), ["Lorem theme.a"])
         XCTAssertEqual(outcome.results.first?.siteProfileID, "site-a")
@@ -48,11 +48,11 @@ final class SiteCatalogServiceTests: XCTestCase {
             runtimeFactory: { _, _ in TestSiteRuntime() }
         )
 
-        let blank = await service.search(query: "   ", in: [enabled, disabled])
+        let blank = await service.search(SearchQuery(text: "   ", page: 1), in: [enabled, disabled])
         XCTAssertTrue(blank.results.isEmpty)
         XCTAssertTrue(blank.failures.isEmpty)
 
-        let filtered = await service.search(query: "lorem", in: [enabled, disabled])
+        let filtered = await service.search(SearchQuery(text: "lorem", page: 1), in: [enabled, disabled])
         XCTAssertEqual(filtered.results.map(\.siteProfileID), ["site-a"])
     }
 
@@ -83,7 +83,7 @@ final class SiteCatalogServiceTests: XCTestCase {
             runtimeFactory: { _, _ in TestSiteRuntime() }
         )
 
-        _ = await service.search(query: "lorem", in: [profile])
+        _ = await service.search(SearchQuery(text: "lorem", page: 1), in: [profile])
 
         XCTAssertEqual(recorder.urls.last, "https://example.org/search?s=lorem")
     }
@@ -100,7 +100,7 @@ final class SiteCatalogServiceTests: XCTestCase {
             runtimeFactory: { _, _ in DuplicateSearchRuntime() }
         )
 
-        let outcome = await service.search(query: "lorem", in: [profile])
+        let outcome = await service.search(SearchQuery(text: "lorem", page: 1), in: [profile])
 
         XCTAssertEqual(outcome.results.count, 1)
         XCTAssertEqual(outcome.results.first?.key, "https://example.org/series")
@@ -133,7 +133,7 @@ final class SiteCatalogServiceTests: XCTestCase {
             runtimeFactory: { _, _ in ContextRecordingRuntime(recorder: recorder) }
         )
 
-        _ = await service.search(query: "C++", in: [profile])
+        _ = await service.search(SearchQuery(text: "C++", page: 1), in: [profile])
 
         XCTAssertEqual(recorder.urls.last, "https://example.org/search?q=C%2B%2B")
         XCTAssertEqual(recorder.baseURLs.last, "https://example.org/search?q=C%2B%2B")
@@ -165,13 +165,13 @@ final class SiteCatalogServiceTests: XCTestCase {
             runtimeFactory: { _, _ in PagingRuntime() }
         )
 
-        let first = await service.search(query: "lorem", in: [profile])
+        let first = await service.search(SearchQuery(text: "lorem", page: 1), in: [profile])
         XCTAssertEqual(first.results.map(\.title), ["Page 1"])
         XCTAssertTrue(first.hasMore)
         XCTAssertEqual(first.nextPageURLs, ["site-a": "https://example.org/search?page=2"])
 
         let second = await service.searchNextPage(
-            query: "lorem",
+            query: SearchQuery(text: "lorem", page: 1),
             in: [profile],
             continuingFrom: first
         )
@@ -207,7 +207,7 @@ final class SiteCatalogServiceTests: XCTestCase {
             runtimeFactory: { _, _ in PagingRuntime() }
         )
 
-        let outcome = await service.search(query: "lorem", in: [profile])
+        let outcome = await service.search(SearchQuery(text: "lorem", page: 1), in: [profile])
 
         XCTAssertFalse(outcome.hasMore)
         XCTAssertTrue(outcome.nextPageURLs.isEmpty)
@@ -565,6 +565,11 @@ private struct TestSiteRuntime: SiteAdapterRuntime {
 
     func dispose() async {}
 
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres { .init(filters: []) }
+
     private var title: String {
         "Lorem theme.a"
     }
@@ -736,6 +741,10 @@ private struct DuplicateSearchRuntime: SiteAdapterRuntime {
 
     func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
     func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] { [] }
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres { .init(filters: []) }
     func dispose() async {}
 }
 
@@ -778,6 +787,10 @@ private struct ContextRecordingRuntime: SiteAdapterRuntime {
 
     func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
     func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] { [] }
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres { .init(filters: []) }
     func dispose() async {}
 }
 
@@ -802,6 +815,10 @@ private struct ForeignAttributionRuntime: SiteAdapterRuntime {
 
     func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter] { [] }
     func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] { [] }
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres { .init(filters: []) }
     func dispose() async {}
 }
 
@@ -831,5 +848,9 @@ private struct PagingRuntime: SiteAdapterRuntime {
         chapterKey: String,
         in page: PluginPageContext
     ) async throws -> [Page] { [] }
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres { .init(filters: []) }
     func dispose() async {}
 }

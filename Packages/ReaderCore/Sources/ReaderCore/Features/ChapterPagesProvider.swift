@@ -86,12 +86,18 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         guard let chapterURL = AdapterSession.absoluteURL(chapterKey, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(chapterKey)
         }
-        let response = try await session.bridge.request(HttpRequest(url: chapterURL.absoluteString))
-        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
-            throw SiteBrowsingError.challengeRequired(chapterURL)
-        }
-        guard (200...299).contains(response.status) else {
-            throw SiteBrowsingError.chapterFetchFailed(response.status)
+        let response: HttpResponse
+        do {
+            response = try await session.bridge.hybridRequest(
+                HttpRequest(url: chapterURL.absoluteString), siteProfile: profile)
+            guard (200...299).contains(response.status) else {
+                throw SiteBrowsingError.chapterFetchFailed(response.status)
+            }
+        } catch let error as PluginEngineError {
+            if case .challengeRequired(let challengeURL) = error {
+                throw SiteBrowsingError.challengeRequired(challengeURL)
+            }
+            throw error
         }
 
         let context = PluginPageContext(
@@ -133,9 +139,6 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         chapter: ChapterEntity,
         profile: SiteProfile
     ) throws -> [PageEntity] {
-        guard let baseHost = URL(string: profile.baseURL)?.host?.lowercased(), !baseHost.isEmpty else {
-            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
-        }
 
         var seenIndices = Set<Int>()
         var pages: [PageEntity] = []
@@ -145,11 +148,11 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
                 throw SiteBrowsingError.duplicatePageIndex(page.index)
             }
 
+            // Images are static assets; allow any HTTPS URL (CDN may differ from site host).
             guard
                 let url = URL(string: page.imageURL),
                 url.scheme?.lowercased() == "https",
-                let host = url.host?.lowercased(),
-                HostMatcher.matches(pattern: baseHost, host: host)
+                url.host != nil
             else {
                 throw SiteBrowsingError.invalidPageURL(page.imageURL)
             }

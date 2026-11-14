@@ -656,6 +656,58 @@ public final class PluginBridge: @unchecked Sendable {
         return try await requestHandler.perform(request)
     }
 
+    /// Performs a request with hybrid native/WebView strategy.
+    ///
+    /// 1. Tries native HTTP request first (fast)
+    /// 2. If challenge detected AND site has usesWebViewMode=true, tries WebView mode
+    /// 3. If WebView fails or site doesn't support it, throws challengeRequired for manual handling
+    public func hybridRequest(_ httpRequest: HttpRequest, siteProfile: SiteProfile) async throws -> HttpResponse {
+        // Try native first
+        do {
+            let response = try await request(httpRequest)
+
+            // Check for challenge
+            if SiteChallengeDetector.isChallenge(status: response.status, body: response.body),
+                let url = URL(string: httpRequest.url)
+            {
+
+                // Site supports WebView mode? Try automatic resolution
+                if siteProfile.usesWebViewMode {
+                    logger.log(
+                        "Native request hit challenge, trying WebView mode for \(url.host ?? "unknown")", level: 0,
+                        context: nil)
+
+                    do {
+                        let webViewHandler = WebViewRequestHandler(policy: policy, logger: logger)
+                        let webViewResponse = try await webViewHandler.perform(httpRequest, timeout: policy.timeout)
+
+                        // Verify WebView actually solved it
+                        if !SiteChallengeDetector.isChallenge(
+                            status: webViewResponse.status, body: webViewResponse.body)
+                        {
+                            logger.log("WebView mode successfully resolved challenge", level: 0, context: nil)
+                            return webViewResponse
+                        }
+
+                        logger.warn("WebView mode did not resolve challenge", level: 1, context: nil)
+                    } catch {
+                        logger.warn("WebView mode failed: \(error.localizedDescription)", level: 1, context: nil)
+                    }
+                }
+
+                // Fall through to manual challenge
+                throw PluginEngineError.challengeRequired(url)
+            }
+
+            return response
+
+        } catch let error as PluginEngineError {
+            throw error
+        } catch {
+            throw error
+        }
+    }
+
     /// Schedules a timer callback (nonisolated for synchronous bridge calls).
     @discardableResult
     public nonisolated func setTimeout(_ ms: Int, _ callback: @escaping @Sendable () -> Void) -> Int {

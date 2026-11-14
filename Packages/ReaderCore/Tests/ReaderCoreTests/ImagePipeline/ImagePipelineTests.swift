@@ -116,4 +116,56 @@ final class ImagePipelineTests: XCTestCase {
         XCTAssertEqual(statistics.totalSize, 5)
         XCTAssertEqual(statistics.inFlightRequests, 0)
     }
+
+    func testReferrerRegistryResolvesExactAndWildcardHosts() async {
+        let registry = ReferrerRegistry.shared
+        let hosts = [
+            "cdn.example.org",
+            "img.example.org",
+            "*.static.example.org",
+        ]
+        await registry.unregister(hosts)
+
+        await registry.register([
+            "cdn.example.org": "https://example.org/",
+            "*.static.example.org": "https://example.org/",
+        ])
+
+        let exact = await registry.referrer(for: "cdn.example.org")
+        XCTAssertEqual(exact, "https://example.org/")
+
+        let wildcard = await registry.referrer(for: "img.static.example.org")
+        XCTAssertEqual(wildcard, "https://example.org/")
+
+        let unknown = await registry.referrer(for: "images.example.com")
+        XCTAssertNil(unknown)
+
+        // A referrer learned from a successful retry is reusable for the host.
+        await registry.register("img.example.org", referrer: "https://example.net/")
+        let learned = await registry.referrer(for: "img.example.org")
+        XCTAssertEqual(learned, "https://example.net/")
+
+        await registry.unregister(hosts)
+    }
+
+    func testReferrerCandidatesTryOriginThenPage() {
+        // The CDN may require the bare origin; the full page is kept as a
+        // second attempt for CDNs that compare against the page.
+        XCTAssertEqual(
+            ImagePipeline.referrerCandidates(from: "https://example.org/manga/example/chapter-1"),
+            ["https://example.org/", "https://example.org/manga/example/chapter-1"]
+        )
+
+        // A bare origin needs no duplicate.
+        XCTAssertEqual(
+            ImagePipeline.referrerCandidates(from: "https://example.org"),
+            ["https://example.org/"]
+        )
+
+        // A port is preserved.
+        XCTAssertEqual(
+            ImagePipeline.referrerCandidates(from: "https://example.org:8443/path"),
+            ["https://example.org:8443/", "https://example.org:8443/path"]
+        )
+    }
 }

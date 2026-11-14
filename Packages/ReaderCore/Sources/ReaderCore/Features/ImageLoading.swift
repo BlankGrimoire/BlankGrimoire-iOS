@@ -12,20 +12,50 @@ public protocol ImageLoading: Sendable {
     ///
     /// Reader pages may require headers such as `Referer`; covers and favicons
     /// pass `nil`.
-    func loadImageData(for url: String, headers: [String: String]?) async throws -> Data
+    ///
+    /// `siteBaseURL` is the origin of the site that produced the URL. When the
+    /// CDN rejects the request because of a missing or wrong `Referer`, the
+    /// pipeline retries with this origin and remembers the mapping for later
+    /// requests, so no CDN domain has to be hardcoded.
+    func loadImageData(
+        for url: String,
+        headers: [String: String]?,
+        siteBaseURL: String?
+    ) async throws -> Data
+
     func clearCache() async
+
     /// Warms the cache for images the reader is likely to show next.
-    func prefetch(_ urls: [String], headers: [String: [String: String]]) async
+    func prefetch(
+        _ urls: [String],
+        headers: [String: [String: String]],
+        siteBaseURL: String?
+    ) async
 }
 
 extension ImageLoading {
     /// Convenience overload for requests without custom headers.
-    public func loadImageData(for url: String) async throws -> Data {
-        try await loadImageData(for: url, headers: nil)
+    public func loadImageData(
+        for url: String,
+        headers: [String: String]? = nil
+    ) async throws -> Data {
+        try await loadImageData(for: url, headers: headers, siteBaseURL: nil)
+    }
+
+    /// Convenience overload for prefetching without a site origin.
+    public func prefetch(
+        _ urls: [String],
+        headers: [String: [String: String]] = [:]
+    ) async {
+        await prefetch(urls, headers: headers, siteBaseURL: nil)
     }
 
     /// Prefetching is optional: previews and tests can ignore it.
-    public func prefetch(_ urls: [String], headers: [String: [String: String]]) async {}
+    public func prefetch(
+        _ urls: [String],
+        headers: [String: [String: String]],
+        siteBaseURL: String?
+    ) async {}
 }
 
 /// `ImageLoading` implementation backed by a lazily created `ImagePipeline`.
@@ -43,8 +73,16 @@ public actor PipelineImageLoader: ImageLoading {
         self.configuration = configuration
     }
 
-    public func loadImageData(for url: String, headers: [String: String]?) async throws -> Data {
-        try await resolvedPipeline().fetch(url, headers: headers).data
+    public func loadImageData(
+        for url: String,
+        headers: [String: String]?,
+        siteBaseURL: String?
+    ) async throws -> Data {
+        try await resolvedPipeline().fetch(
+            url,
+            headers: headers,
+            siteBaseURL: siteBaseURL
+        ).data
     }
 
     /// Clears the underlying memory and disk caches.
@@ -57,9 +95,18 @@ public actor PipelineImageLoader: ImageLoading {
         await pipeline.clearCache()
     }
 
-    public func prefetch(_ urls: [String], headers: [String: [String: String]]) async {
+    public func prefetch(
+        _ urls: [String],
+        headers: [String: [String: String]],
+        siteBaseURL: String?
+    ) async {
         guard let pipeline = try? await resolvedPipeline(), !urls.isEmpty else { return }
-        _ = await pipeline.prefetch(urls, headers: headers, priority: .background)
+        _ = await pipeline.prefetch(
+            urls,
+            headers: headers,
+            siteBaseURL: siteBaseURL,
+            priority: .background
+        )
     }
 
     private func resolvedPipeline() async throws -> ImagePipeline {

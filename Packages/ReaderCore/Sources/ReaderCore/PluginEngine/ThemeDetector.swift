@@ -62,6 +62,7 @@ public actor ThemeDetector {
 
     private let adapterStore: any AdapterStore
     private let requestHandler: PluginRequestHandler
+    private let bridge: PluginBridge?
     private let logger: PluginLogger
     private var regexCache: [String: NSRegularExpression] = [:]
     private var invalidPatterns: Set<String> = []
@@ -69,10 +70,12 @@ public actor ThemeDetector {
     public init(
         adapterStore: any AdapterStore,
         requestHandler: PluginRequestHandler,
+        bridge: PluginBridge? = nil,
         logger: PluginLogger = ConsolePluginLogger()
     ) {
         self.adapterStore = adapterStore
         self.requestHandler = requestHandler
+        self.bridge = bridge
         self.logger = logger
     }
 
@@ -159,12 +162,36 @@ public actor ThemeDetector {
 
     private func fetchPage(_ url: String) async throws -> String {
         let request = HttpRequest(url: url, method: "GET")
-        let response = try await requestHandler.perform(request)
-
-        if SiteChallengeDetector.isChallenge(status: response.status, body: response.body),
-            let url = URL(string: url)
-        {
-            throw ThemeDetectorError.challengeRequired(url)
+        let response: HttpResponse
+        if let bridge {
+            // Use hybrid request if bridge is available (for WebView mode support)
+            // Create a minimal SiteProfile for the bridge. Theme detection doesn't have a
+            // specific adapter yet, so we enable WebView mode to handle any challenges
+            // during detection (e.g., Cloudflare on the home page).
+            let baseURL = SiteURL.baseURLString(from: url) ?? url
+            let host = SiteURL.host(from: url) ?? ""
+            let profile = SiteProfile(
+                id: "theme-detection-\(host)",
+                name: host,
+                baseURL: baseURL,
+                themeID: "theme-detection",
+                usesWebViewMode: true
+            )
+            do {
+                response = try await bridge.hybridRequest(request, siteProfile: profile)
+            } catch let error as PluginEngineError {
+                if case .challengeRequired(let challengeURL) = error {
+                    throw ThemeDetectorError.challengeRequired(challengeURL)
+                }
+                throw error
+            }
+        } else {
+            response = try await requestHandler.perform(request)
+            if SiteChallengeDetector.isChallenge(status: response.status, body: response.body),
+                let url = URL(string: url)
+            {
+                throw ThemeDetectorError.challengeRequired(url)
+            }
         }
         guard response.status >= 200 && response.status < 300 else {
             throw ThemeDetectorError.fetchFailed("HTTP \(response.status)")
