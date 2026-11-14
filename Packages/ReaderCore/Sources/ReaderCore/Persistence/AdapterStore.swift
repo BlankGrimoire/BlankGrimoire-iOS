@@ -516,7 +516,7 @@ public final class DefaultAdapterStore: AdapterStore {
         )
 
         // 6. Store bundle
-        let referrerHeaders = verified.manifest.referrerHeaders ?? [:]
+        let referrerHeaders = verified.manifest.referrerHeaders
         let themeAdapter = ThemeAdapter(
             id: verified.manifest.id,
             name: verified.manifest.name,
