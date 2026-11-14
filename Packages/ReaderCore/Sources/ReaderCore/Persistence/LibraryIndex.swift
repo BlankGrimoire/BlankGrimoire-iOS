@@ -21,6 +21,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
     public let createdAt: Date
     public let updatedAt: Date
     public let siteName: String?
+    public let siteURL: String?
 
     public init(entity: MangaEntity) {
         self.id = entity.id
@@ -35,6 +36,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
         self.createdAt = entity.createdAt
         self.updatedAt = entity.updatedAt
         self.siteName = entity.siteName
+        self.siteURL = entity.siteURL
     }
 
     /// Returns a copy with a new favorite state, used for optimistic updates.
@@ -51,7 +53,8 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
             lastReadAt: lastReadAt,
             createdAt: createdAt,
             updatedAt: updatedAt,
-            siteName: siteName
+            siteName: siteName,
+            siteURL: siteURL
         )
     }
 
@@ -67,7 +70,8 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
         lastReadAt: Date?,
         createdAt: Date,
         updatedAt: Date,
-        siteName: String?
+        siteName: String?,
+        siteURL: String?
     ) {
         self.id = id
         self.title = title
@@ -81,6 +85,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.siteName = siteName
+        self.siteURL = siteURL
     }
 }
 

@@ -127,9 +127,13 @@
         var body: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 ZStack(alignment: .bottomTrailing) {
-                    MangaCoverImage(url: manga.coverURL, loader: imageLoader)
-                        .aspectRatio(2 / 3, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+                    MangaCoverImage(
+                        url: manga.coverURL,
+                        loader: imageLoader,
+                        siteBaseURL: manga.siteURL
+                    )
+                    .aspectRatio(2 / 3, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
 
                     if manga.isFavorite {
                         Image(systemName: "heart.fill")

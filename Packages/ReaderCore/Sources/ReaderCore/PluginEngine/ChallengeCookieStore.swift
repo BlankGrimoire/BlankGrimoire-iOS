@@ -51,10 +51,19 @@ public final class ChallengeCookieStore: @unchecked Sendable {
         defer { lock.unlock() }
 
         let now = Date()
-        return (cookiesByHost[host] ?? []).filter { cookie in
-            guard let expires = cookie.expiresDate else { return true }
-            return expires > now
+        var cookies: [HTTPCookie] = []
+        for (storedHost, storedCookies) in cookiesByHost {
+            // A cookie set for the parent domain (`.example.org`) applies to
+            // every subdomain, so include it for a request to `www.example.org`.
+            guard host == storedHost || host.hasSuffix("." + storedHost) else { continue }
+            cookies.append(
+                contentsOf: storedCookies.filter { cookie in
+                    guard let expires = cookie.expiresDate else { return true }
+                    return expires > now
+                }
+            )
         }
+        return cookies
     }
 
     /// Removes every stored cookie. Used when a site profile is deleted.

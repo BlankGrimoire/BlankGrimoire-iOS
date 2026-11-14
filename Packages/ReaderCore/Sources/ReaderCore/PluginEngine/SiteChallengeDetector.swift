@@ -18,8 +18,6 @@ enum SiteChallengeDetector {
             "verify you are human",
             "enable javascript and cookies",
             "sorry, you have been blocked",
-            "hcaptcha",
-            "turnstile",
         ]
         return markers.contains { normalized.contains($0) }
     }

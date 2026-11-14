@@ -40,6 +40,12 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
     /// Request timeout for this site.
     public var timeout: TimeInterval
 
+    /// Whether this site should use WebView mode for requests that hit challenges.
+    /// When enabled, the app will automatically try to solve JavaScript challenges
+    /// (Cloudflare Turnstile, etc.) in a background WebView before falling back
+    /// to the manual ChallengeView.
+    public var usesWebViewMode: Bool
+
     public init(
         id: String = UUID().uuidString,
         name: String,
@@ -52,7 +58,8 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         customHeaders: [String: String] = [:],
         cookieHandling: CookieHandling = .automatic,
         maxRedirects: Int = 5,
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30,
+        usesWebViewMode: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -66,6 +73,7 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         self.cookieHandling = cookieHandling
         self.maxRedirects = max(0, maxRedirects)
         self.timeout = max(1, timeout)
+        self.usesWebViewMode = usesWebViewMode
     }
 
     /// Creates a SiteContext for use with the plugin engine.

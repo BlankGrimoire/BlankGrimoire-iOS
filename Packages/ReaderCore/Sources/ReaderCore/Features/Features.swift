@@ -90,6 +90,11 @@
                 .tag(Tab.settings)
             }
             .preferredColorScheme(theme.colorScheme)
+            .task {
+                // Apply the theme-declared CDN referrer map before the first
+                // image load; runtime learning stays as the fallback.
+                await dependencies.registerThemeReferrerHeaders()
+            }
         }
     }
 

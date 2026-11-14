@@ -767,6 +767,48 @@ var BlankGrimoireRuntime = (() => {
     }
     return [];
   }
+  async function extractGenres(runtime, mapping) {
+    assertAdapterAPIVersion(runtime.adapter);
+    const document = runtime.document;
+    const filters = [];
+    if (!mapping.source) {
+      return { filters };
+    }
+    const elements = document.querySelectorAll(mapping.source);
+    for (const element of Array.from(elements)) {
+      const displayName = mapping.displayNameAttr ? element.querySelector(mapping.displayNameAttr)?.textContent?.trim() || element.textContent?.trim() : element.textContent?.trim();
+      if (!displayName) continue;
+      let value = "";
+      if (mapping.valueAttr) {
+        value = element.getAttribute(mapping.valueAttr) || "";
+      } else {
+        value = element.textContent?.trim() || "";
+      }
+      if (mapping.valuePattern) {
+        const regex = new RegExp(mapping.valuePattern);
+        const match = value.match(regex);
+        if (match && match[1]) {
+          value = match[1];
+        }
+      }
+      if (value) {
+        const href = element.getAttribute("href");
+        if (href) {
+          filters.push({
+            displayName: displayName.trim(),
+            value: value.trim(),
+            url: href
+          });
+        } else {
+          filters.push({
+            displayName: displayName.trim(),
+            value: value.trim()
+          });
+        }
+      }
+    }
+    return { filters };
+  }
   var extract = extractPages;
   function asRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -809,6 +851,17 @@ var BlankGrimoireRuntime = (() => {
             chapterKey: String(args.chapterKey ?? "")
           })
         );
+      case "extractGenres": {
+        const argsRecord = args;
+        const mapping = {
+          source: String(argsRecord.source ?? "")
+        };
+        if (argsRecord.displayNameAttr) mapping.displayNameAttr = String(argsRecord.displayNameAttr);
+        if (argsRecord.valueAttr) mapping.valueAttr = String(argsRecord.valueAttr);
+        if (argsRecord.valuePattern) mapping.valuePattern = String(argsRecord.valuePattern);
+        if (argsRecord.filterParam) mapping.filterParam = String(argsRecord.filterParam);
+        return toJSON(await extractGenres(runtime, mapping));
+      }
       default:
         throw new Error(`Unknown adapter method: ${method}`);
     }

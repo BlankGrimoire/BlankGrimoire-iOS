@@ -166,16 +166,20 @@
 
         private var coverSection: some View {
             HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(url: manga.coverURL, loader: dependencies.imageLoader)
-                    .frame(width: 120)
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
-                    .shadow(
-                        color: .black.opacity(DesignTokens.Shadow.md.opacity),
-                        radius: DesignTokens.Shadow.md.radius,
-                        x: DesignTokens.Shadow.md.x,
-                        y: DesignTokens.Shadow.md.y
-                    )
+                MangaCoverImage(
+                    url: manga.coverURL,
+                    loader: dependencies.imageLoader,
+                    siteBaseURL: manga.siteURL
+                )
+                .frame(width: 120)
+                .aspectRatio(2 / 3, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
+                .shadow(
+                    color: .black.opacity(DesignTokens.Shadow.md.opacity),
+                    radius: DesignTokens.Shadow.md.radius,
+                    x: DesignTokens.Shadow.md.x,
+                    y: DesignTokens.Shadow.md.y
+                )
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(manga.title)
@@ -256,9 +260,27 @@
             .card()
         }
 
-        private var tagsSection: some View {
+        private var genresSection: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 Text("Genres")
+                    .font(Typography.headline)
+
+                FlowLayout(spacing: DesignTokens.Spacing.xs) {
+                    ForEach(manga.genres ?? [], id: \.self) { genre in
+                        Text(genre)
+                            .font(Typography.caption1)
+                            .padding(.horizontal, DesignTokens.Spacing.sm)
+                            .padding(.vertical, DesignTokens.Spacing.xs)
+                            .background(AppColor.primary.opacity(0.1), in: Capsule())
+                            .foregroundStyle(AppColor.primary)
+                    }
+                }
+            }
+        }
+
+        private var tagsSection: some View {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                Text("Tags")
                     .font(Typography.headline)
 
                 FlowLayout(spacing: DesignTokens.Spacing.xs) {
@@ -267,8 +289,8 @@
                             .font(Typography.caption1)
                             .padding(.horizontal, DesignTokens.Spacing.sm)
                             .padding(.vertical, DesignTokens.Spacing.xs)
-                            .background(AppColor.primary.opacity(0.1), in: Capsule())
-                            .foregroundStyle(AppColor.primary)
+                            .background(AppColor.secondary.opacity(0.1), in: Capsule())
+                            .foregroundStyle(AppColor.secondary)
                     }
                 }
             }
@@ -330,6 +352,17 @@
 
                     Spacer()
 
+                    if let resumeChapter = viewModel.resumeChapter {
+                        Button {
+                            readerRoute = ReaderRoute(chapter: resumeChapter)
+                        } label: {
+                            Label("Resume", systemImage: "play.fill")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+
                     if viewModel.isLoadingChapters {
                         ProgressView()
                             .controlSize(.small)
@@ -368,6 +401,10 @@
 
                     if let synopsis = manga.synopsis, !synopsis.isEmpty {
                         synopsisSection
+                    }
+
+                    if !manga.genres.isEmpty {
+                        genresSection
                     }
 
                     if !manga.tags.isEmpty {
@@ -419,10 +456,13 @@
             .task {
                 await viewModel.loadChapters()
             }
-            .sheet(item: $readerRoute) { route in
-                NavigationStack {
-                    ReaderView(manga: manga, chapter: route.chapter, dependencies: dependencies)
-                }
+            .fullScreenCover(item: $readerRoute) { route in
+                ReaderView(
+                    manga: manga,
+                    chapter: route.chapter,
+                    chapters: viewModel.chapters,
+                    dependencies: dependencies
+                )
             }
             .onChange(of: viewModel.challengeURL) { _, url in
                 guard let url else { return }

@@ -198,6 +198,24 @@ final class SitesViewModelTests: XCTestCase {
         XCTAssertTrue(repository.profiles.isEmpty)
     }
 
+    func testLoadProfilesRegistersThemeReferrerHeaders() async {
+        let host = "cdn.register.example.org"
+        await ReferrerRegistry.shared.unregister([host])
+        let viewModel = SitesViewModel(
+            siteProfileRepository: TestSiteProfileRepository(),
+            themeSource: TestThemeSource(
+                referrerHeaders: [host: "https://example.org/"]
+            ),
+            themeDetector: TestThemeDetector()
+        )
+
+        await viewModel.loadProfiles()
+
+        let referrer = await ReferrerRegistry.shared.referrer(for: host)
+        XCTAssertEqual(referrer, "https://example.org/")
+        await ReferrerRegistry.shared.unregister([host])
+    }
+
     func testDetectThemeSelectsDetectedTheme() async {
         let repository = TestSiteProfileRepository()
         let viewModel = SitesViewModel(
@@ -394,6 +412,8 @@ private final class TestSiteProfileRepository: SiteProfileRepository {
 }
 
 private struct TestThemeSource: ThemeSource {
+    var referrerHeaders: [String: String] = [:]
+
     func listThemes() async throws -> [ThemeAdapter] {
         [
             ThemeAdapter(
@@ -406,7 +426,8 @@ private struct TestThemeSource: ThemeSource {
                     details: .init(title: ".title"),
                     chapters: .init(item: ".chapter", link: "a", order: "desc"),
                     pages: .init(strategies: [])
-                )
+                ),
+                referrerHeaders: referrerHeaders
             ),
             ThemeAdapter(
                 id: "theme.old",

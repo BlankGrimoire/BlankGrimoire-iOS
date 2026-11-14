@@ -63,6 +63,28 @@ public final class MangaDetailViewModel {
         isLoadingChapters = false
     }
 
+    /// Chapter to open with the "Resume" action.
+    ///
+    /// Prefers the series' last read chapter and falls back to the chapter
+    /// with the most recent progress, so the action also works for libraries
+    /// imported before `lastReadChapterId` was persisted.
+    public var resumeChapter: ChapterEntity? {
+        if let lastReadChapterID = manga.lastReadChapterId,
+            let chapter = chapters.first(where: { $0.id == lastReadChapterID })
+        {
+            return chapter
+        }
+
+        return
+            chapters
+            .filter { !$0.readingProgressEntries.isEmpty }
+            .max { lhs, rhs in
+                let left = lhs.readingProgressEntries.map(\.readAt).max() ?? .distantPast
+                let right = rhs.readingProgressEntries.map(\.readAt).max() ?? .distantPast
+                return left < right
+            }
+    }
+
     /// URL the visible verification browser must open, when the site asked for
     /// a challenge.
     public var challengeURL: URL? {

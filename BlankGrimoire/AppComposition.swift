@@ -51,6 +51,10 @@ enum AppComposition {
             adapterStore: adapterStore
         )
 
+        // Image pipeline configured with referrer headers from the active theme adapter.
+        // The referrer headers are loaded from the theme adapter's manifest.
+        let imageLoader = PipelineImageLoader(configuration: ImagePipelineConfiguration())
+
         return FeaturesDependencies(
             mangaRepository: persistence.mangas,
             chapterRepository: persistence.chapters,
@@ -60,7 +64,7 @@ enum AppComposition {
             siteProfileRepository: persistence.siteProfiles,
             themeSource: CompositeThemeSource(sources: [localThemeSource, remoteThemeSource]),
             themeDetector: DefaultSiteThemeDetector(adapterStore: adapterStore),
-            imageLoader: PipelineImageLoader(),
+            imageLoader: imageLoader,
             adapterStore: adapterStore,
             catalogService: catalogService,
             chapterPagesProvider: chapterPagesProvider

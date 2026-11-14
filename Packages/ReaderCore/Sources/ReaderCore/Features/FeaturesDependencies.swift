@@ -109,6 +109,24 @@ public struct FeaturesDependencies {
         )
     }
 
+    // MARK: - Startup provisioning
+
+    /// Registers the CDN referrer maps declared by the installed themes.
+    ///
+    /// Call once at launch so covers and reader pages use the referrer the
+    /// theme declares without requiring the user to open the Sites tab first.
+    /// The app never contains a CDN host itself; it only applies the map.
+    public func registerThemeReferrerHeaders() async {
+        // Read the installed bundles (local, no network) so startup does not
+        // depend on the remote index being reachable.
+        guard let adapterStore,
+            let bundles = try? await adapterStore.listInstalledAdapters()
+        else {
+            return
+        }
+        await ReferrerRegistry.shared.register(themes: bundles.map(\.themeAdapter))
+    }
+
     // MARK: - Optional feature accessors
 
     public var pageRepository: (any PageRepository)? { optional.pageRepository }

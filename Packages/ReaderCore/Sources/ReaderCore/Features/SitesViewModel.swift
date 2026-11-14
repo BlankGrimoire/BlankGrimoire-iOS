@@ -2,6 +2,7 @@
 
 import Foundation
 import Observation
+import ReaderCore
 
 /// View model for sites management
 @MainActor
@@ -62,6 +63,7 @@ public final class SitesViewModel {
         do {
             siteProfiles = try await siteProfileRepository.fetchAll()
             availableThemes = try await themeSource.listThemes()
+            await registerReferrerHeaders(for: availableThemes)
 
             if !availableThemes.contains(where: { $0.id == selectedThemeID }) {
                 selectedThemeID = availableThemes.first?.id ?? ""
@@ -69,6 +71,15 @@ public final class SitesViewModel {
         } catch {
             lastError = error
         }
+    }
+
+    /// Registers the CDN referrer maps declared by themes.
+    ///
+    /// The image pipeline only sees image URLs, so it relies on this registry
+    /// for the theme-declared mapping. Registering when profiles load keeps the
+    /// mapping after a relaunch, not just for a site added in this session.
+    private func registerReferrerHeaders(for themes: [ThemeAdapter]) async {
+        await ReferrerRegistry.shared.register(themes: themes)
     }
 
     /// Validates and stores a new site profile.
@@ -104,6 +115,10 @@ public final class SitesViewModel {
             // Check and insert happen inside the store without suspending, so
             // two taps cannot both pass the duplicate check.
             try await siteProfileRepository.saveIfAbsent(profile)
+
+            // Register the theme's referrer headers for CDN image loading.
+            await ReferrerRegistry.shared.register(theme.referrerHeaders)
+
             siteProfiles.append(profile)
             sortProfiles()
             return true
@@ -136,6 +151,7 @@ public final class SitesViewModel {
             if !availableThemes.contains(where: { $0.id == result.theme.id }) {
                 availableThemes.append(result.theme)
             }
+            await registerReferrerHeaders(for: [result.theme])
             selectedThemeID = result.theme.id
             lastDetection = result
             return result
@@ -252,6 +268,7 @@ public final class SitesViewModel {
         updated.themeID = theme.id
         updated.themeVersion = theme.version
         await updateProfile(updated)
+        await registerReferrerHeaders(for: [theme])
 
         if lastError == nil {
             await invalidateCachedPages(for: current)

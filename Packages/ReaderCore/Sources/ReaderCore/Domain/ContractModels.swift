@@ -168,6 +168,7 @@ public struct MangaDetails: Codable, Sendable, Identifiable {
     public let artists: [String]?
     public let synopsis: String?
     public let tags: [String]?
+    public let genres: [String]?
     public let status: MangaStatus
     public let contentRating: ContentRating
     public let attribution: Attribution?
@@ -183,6 +184,7 @@ public struct MangaDetails: Codable, Sendable, Identifiable {
         artists: [String]? = nil,
         synopsis: String? = nil,
         tags: [String]? = nil,
+        genres: [String]? = nil,
         status: MangaStatus,
         contentRating: ContentRating,
         attribution: Attribution? = nil
@@ -195,6 +197,7 @@ public struct MangaDetails: Codable, Sendable, Identifiable {
         self.artists = artists
         self.synopsis = synopsis
         self.tags = tags
+        self.genres = genres
         self.status = status
         self.contentRating = contentRating
         self.attribution = attribution
@@ -263,10 +266,83 @@ public struct SearchQuery: Codable, Sendable {
     public let text: String?
     public let page: Int
     public let filters: [String: String]?
+    public let genres: [String]?
 
-    public init(text: String? = nil, page: Int = 1, filters: [String: String]? = nil) {
+    public init(text: String? = nil, page: Int = 1, filters: [String: String]? = nil, genres: [String]? = nil) {
         self.text = text
         self.page = page
+        self.filters = filters
+        self.genres = genres
+    }
+}
+
+/// A genre filter exposed by a specific site
+public struct SiteGenreFilter: Codable, Sendable, Equatable, Hashable {
+    public let displayName: String
+    public let value: String
+    public let url: String?
+
+    public init(displayName: String, value: String, url: String? = nil) {
+        self.displayName = displayName
+        self.value = value
+        self.url = url
+    }
+}
+
+/// Mapping configuration for extracting genre filters from a site
+public struct GenreMapping: Codable, Sendable, Equatable {
+    public let source: String
+    public let displayNameAttr: String?
+    public let valueAttr: String?
+    public let valuePattern: String?
+    public let filterParam: String?
+
+    public init(
+        source: String,
+        displayNameAttr: String? = nil,
+        valueAttr: String? = nil,
+        valuePattern: String? = nil,
+        filterParam: String? = nil
+    ) {
+        self.source = source
+        self.displayNameAttr = displayNameAttr
+        self.valueAttr = valueAttr
+        self.valuePattern = valuePattern
+        self.filterParam = filterParam
+    }
+}
+
+/// A unified genre (case-insensitive merge across sites)
+public struct UnifiedGenre: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public let id: String
+    public let displayName: String
+    public let siteFilters: [String: SiteGenreFilter]
+
+    public init(displayName: String, siteFilters: [String: SiteGenreFilter]) {
+        self.id = displayName.lowercased()
+        self.displayName = displayName.capitalized
+        self.siteFilters = siteFilters
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        siteFilters = try container.decode([String: SiteGenreFilter].self, forKey: .siteFilters)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, siteFilters
+    }
+}
+
+// MARK: - Genre Extraction Result
+
+/// Result of genre extraction from a page
+public struct ExtractedGenres: Codable, Sendable {
+    public let filters: [SiteGenreFilter]
+
+    public init(filters: [SiteGenreFilter]) {
         self.filters = filters
     }
 }
@@ -280,19 +356,38 @@ public struct ThemeSignature: Codable, Sendable, Equatable {
     public let scriptSrc: [String]?
     public let probePaths: [String]?
     public let minScore: Int
+    /// Whether this theme requires WebView mode to solve JavaScript challenges
+    /// (Cloudflare Turnstile, hCaptcha, etc.) automatically.
+    public let usesWebViewMode: Bool
 
     public init(
         metaGenerator: String? = nil,
         selectors: [String]? = nil,
         scriptSrc: [String]? = nil,
         probePaths: [String]? = nil,
-        minScore: Int
+        minScore: Int,
+        usesWebViewMode: Bool = false
     ) {
         self.metaGenerator = metaGenerator
         self.selectors = selectors
         self.scriptSrc = scriptSrc
         self.probePaths = probePaths
         self.minScore = minScore
+        self.usesWebViewMode = usesWebViewMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        metaGenerator = try container.decodeIfPresent(String.self, forKey: .metaGenerator)
+        selectors = try container.decodeIfPresent([String].self, forKey: .selectors)
+        scriptSrc = try container.decodeIfPresent([String].self, forKey: .scriptSrc)
+        probePaths = try container.decodeIfPresent([String].self, forKey: .probePaths)
+        minScore = try container.decode(Int.self, forKey: .minScore)
+        usesWebViewMode = try container.decodeIfPresent(Bool.self, forKey: .usesWebViewMode) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case metaGenerator, selectors, scriptSrc, probePaths, minScore, usesWebViewMode
     }
 }
 
@@ -386,24 +481,58 @@ public struct ThemeSelectors: Codable, Sendable, Equatable {
         }
     }
 
+    public struct GenreSelectors: Codable, Sendable, Equatable {
+        /// CSS selector that matches the genre links/items on `pagePath`.
+        public let source: String
+        /// Page used to discover the available genres. Defaults to the site root.
+        public let pagePath: String?
+        /// URL template for a genre result page, for example `/genre/{genre}`.
+        public let filterPath: String?
+        public let displayNameAttr: String?
+        public let valueAttr: String?
+        public let valuePattern: String?
+        public let filterParam: String?
+
+        public init(
+            source: String,
+            pagePath: String? = nil,
+            filterPath: String? = nil,
+            displayNameAttr: String? = nil,
+            valueAttr: String? = nil,
+            valuePattern: String? = nil,
+            filterParam: String? = nil
+        ) {
+            self.source = source
+            self.pagePath = pagePath
+            self.filterPath = filterPath
+            self.displayNameAttr = displayNameAttr
+            self.valueAttr = valueAttr
+            self.valuePattern = valuePattern
+            self.filterParam = filterParam
+        }
+    }
+
     public let search: SearchSelectors
     public let details: DetailsSelectors
     public let chapters: ChaptersSelectors
     public let pages: PagesConfig
     public let attribution: AttributionSelectors?
+    public let genre: GenreSelectors?
 
     public init(
         search: SearchSelectors,
         details: DetailsSelectors,
         chapters: ChaptersSelectors,
         pages: PagesConfig,
-        attribution: AttributionSelectors? = nil
+        attribution: AttributionSelectors? = nil,
+        genre: GenreSelectors? = nil
     ) {
         self.search = search
         self.details = details
         self.chapters = chapters
         self.pages = pages
         self.attribution = attribution
+        self.genre = genre
     }
 }
 
@@ -605,19 +734,45 @@ public struct ThemeAdapter: Codable, Sendable, Equatable, Identifiable {
     public let version: String
     public let detectionSignature: ThemeSignature
     public let selectors: ThemeSelectors
+    public let referrerHeaders: [String: String]
 
     public init(
         id: String,
         name: String,
         version: String,
         detectionSignature: ThemeSignature,
-        selectors: ThemeSelectors
+        selectors: ThemeSelectors,
+        referrerHeaders: [String: String] = [:]
     ) {
         self.id = id
         self.name = name
         self.version = version
         self.detectionSignature = detectionSignature
         self.selectors = selectors
+        self.referrerHeaders = referrerHeaders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, version, detectionSignature, selectors, referrerHeaders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        version = try container.decode(String.self, forKey: .version)
+        detectionSignature = try container.decode(
+            ThemeSignature.self,
+            forKey: .detectionSignature
+        )
+        selectors = try container.decode(ThemeSelectors.self, forKey: .selectors)
+        // Older bundles and manifests predate referrer overrides.
+        referrerHeaders =
+            try container.decodeIfPresent(
+                [String: String].self,
+                forKey: .referrerHeaders
+            ) ?? [:]
     }
 }
 
@@ -833,9 +988,11 @@ public struct AdapterManifest: Codable, Sendable {
     public let apiVersion: Int
     public let detectionSignature: ThemeSignature
     public let sha256: String
+    public let referrerHeaders: [String: String]
 
     public init(
-        id: String, name: String, version: String, apiVersion: Int, detectionSignature: ThemeSignature, sha256: String
+        id: String, name: String, version: String, apiVersion: Int, detectionSignature: ThemeSignature, sha256: String,
+        referrerHeaders: [String: String] = [:]
     ) {
         self.id = id
         self.name = name
@@ -843,10 +1000,11 @@ public struct AdapterManifest: Codable, Sendable {
         self.apiVersion = apiVersion
         self.detectionSignature = detectionSignature
         self.sha256 = sha256
+        self.referrerHeaders = referrerHeaders
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, apiVersion, detectionSignature, sha256
+        case id, name, version, apiVersion, detectionSignature, sha256, referrerHeaders
     }
 
     public init(from decoder: Decoder) throws {
@@ -858,6 +1016,7 @@ public struct AdapterManifest: Codable, Sendable {
         apiVersion = try container.decode(Int.self, forKey: .apiVersion)
         detectionSignature = try container.decode(ThemeSignature.self, forKey: .detectionSignature)
         sha256 = try container.decode(String.self, forKey: .sha256)
+        referrerHeaders = try container.decodeIfPresent([String: String].self, forKey: .referrerHeaders) ?? [:]
 
         guard apiVersion == ContractVersion.current else {
             throw DecodingError.dataCorruptedError(

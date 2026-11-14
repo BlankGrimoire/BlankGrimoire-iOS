@@ -3,7 +3,7 @@
 import Foundation
 
 /// One search hit coming from a configured site profile.
-public struct SiteSearchResult: Identifiable, Sendable, Equatable {
+public struct SiteSearchResult: Identifiable, Sendable, Hashable {
     public let siteProfileID: String
     public let siteName: String
     public let siteURL: String
@@ -37,13 +37,21 @@ public struct SiteSearchFailure: Identifiable, Sendable, Equatable {
     public let siteProfileID: String
     public let siteName: String
     public let message: String
+    /// Set when the site answered with a verification page instead of results.
+    public let challengeURL: URL?
 
     public var id: String { siteProfileID }
 
-    public init(siteProfileID: String, siteName: String, message: String) {
+    public init(
+        siteProfileID: String,
+        siteName: String,
+        message: String,
+        challengeURL: URL? = nil
+    ) {
         self.siteProfileID = siteProfileID
         self.siteName = siteName
         self.message = message
+        self.challengeURL = challengeURL
     }
 }
 
@@ -60,6 +68,14 @@ public struct SiteSearchOutcome: Sendable, Equatable {
     /// Whether at least one site has another result page.
     public var hasMore: Bool { !nextPageURLs.isEmpty }
 
+    /// Verification URL surfaced by a site during this search, if any.
+    ///
+    /// The browse screen presents the challenge browser for this URL so the
+    /// user can complete the verification and retry.
+    public var challengeURL: URL? {
+        failures.compactMap(\.challengeURL).first
+    }
+
     public init(
         results: [SiteSearchResult] = [],
         failures: [SiteSearchFailure] = [],
@@ -71,32 +87,85 @@ public struct SiteSearchOutcome: Sendable, Equatable {
     }
 }
 
+/// Details and chapters for a search hit, fetched without importing it.
+///
+/// The browse screen uses this to preview a series before the user decides to
+/// add it to the library.
+public struct SiteSearchDetails: Sendable {
+    public let details: MangaDetails
+    public let chapters: [Chapter]
+
+    public init(details: MangaDetails, chapters: [Chapter]) {
+        self.details = details
+        self.chapters = chapters
+    }
+}
+
 /// Cross-site catalog operations used by the browse screen.
 @MainActor
 public protocol SiteCatalogProviding: Sendable {
-    func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome
+    func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome
+    /// Search with the per-site genre value chosen from a unified genre.
+    ///
+    /// Sites may use different slugs for the same display name, so the
+    /// caller passes the value extracted from each site's own genre list.
+    func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome
     /// Loads the next result page for the sites that announced one.
     ///
     /// Pass the previous outcome: implementations use its `nextPageURLs` to
     /// fetch the following page without repeating the earlier requests.
     func searchNextPage(
-        query: String,
+        query: SearchQuery,
         in profiles: [SiteProfile],
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome
+    /// Loads details and chapters for a search hit without persisting them.
+    ///
+    /// The browse screen uses this to preview a series before importing it.
+    func fetchDetails(_ result: SiteSearchResult) async throws -> SiteSearchDetails
     func importManga(_ result: SiteSearchResult) async throws -> MangaEntity
     /// Refreshes details and chapters for an imported series from its site.
     func refreshChapters(for manga: MangaEntity) async throws
+    /// Extracts the list of genre filters available on a site.
+    func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter]
+    /// Extracts and unifies genres across multiple sites (case-insensitive merge).
+    func fetchUnifiedGenres(for profiles: [SiteProfile]) async -> [UnifiedGenre]
 }
 
 extension SiteCatalogProviding {
+    public func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome {
+        await search(query, in: profiles)
+    }
+
     /// Catalogs that do not paginate report that no further page exists.
     public func searchNextPage(
-        query: String,
+        query: SearchQuery,
         in profiles: [SiteProfile],
         continuingFrom outcome: SiteSearchOutcome
     ) async -> SiteSearchOutcome {
         SiteSearchOutcome()
+    }
+
+    /// Catalogs that do not preview search hits report the feature as absent.
+    public func fetchDetails(_ result: SiteSearchResult) async throws -> SiteSearchDetails {
+        throw SiteBrowsingError.catalogUnavailable
+    }
+
+    public func fetchGenres(for profile: SiteProfile) async throws -> [SiteGenreFilter] {
+        throw SiteBrowsingError.catalogUnavailable
+    }
+
+    public func fetchUnifiedGenres(for profiles: [SiteProfile]) async -> [UnifiedGenre] {
+        // Default implementation returns empty array - conforming types should override
+        return []
     }
 }
 

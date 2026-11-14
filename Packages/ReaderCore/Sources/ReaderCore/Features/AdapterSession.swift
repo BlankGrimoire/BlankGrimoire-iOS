@@ -8,6 +8,10 @@ protocol SiteAdapterRuntime: Sendable {
     func details(for key: String, in page: PluginPageContext) async throws -> MangaDetails
     func chapters(for key: String, in page: PluginPageContext) async throws -> [Chapter]
     func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page]
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres
     func dispose() async
 }
 
@@ -29,6 +33,13 @@ private struct JSAdapterRuntime: SiteAdapterRuntime {
 
     func pages(mangaKey: String, chapterKey: String, in page: PluginPageContext) async throws -> [Page] {
         try await runtime.pages(mangaKey: mangaKey, chapterKey: chapterKey, in: page)
+    }
+
+    func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres {
+        try await runtime.extractGenres(mapping: mapping, in: page)
     }
 
     func dispose() async {

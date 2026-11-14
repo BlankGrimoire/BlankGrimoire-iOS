@@ -216,8 +216,16 @@ private final class StubMangaRepository: MangaRepository {
 }
 
 private struct FailingCatalogService: SiteCatalogProviding {
-    func search(query: String, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
+    func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
         .init(results: [], failures: [])
+    }
+
+    func searchNextPage(
+        query: SearchQuery,
+        in profiles: [SiteProfile],
+        continuingFrom outcome: SiteSearchOutcome
+    ) async -> SiteSearchOutcome {
+        SiteSearchOutcome()
     }
 
     func importManga(_ result: SiteSearchResult) async throws -> MangaEntity {

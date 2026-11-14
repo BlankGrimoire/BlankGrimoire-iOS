@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import ReaderCore
-import SwiftData
 import XCTest
 
+@MainActor
 final class ThemeDetectorTests: XCTestCase {
 
     private var detector: ThemeDetector!
-    private var adapterStore: DefaultAdapterStore!
+    private var adapterStore: TestAdapterStore!
     private var requestHandler: PluginRequestHandler!
 
     override func setUp() async throws {
@@ -20,7 +20,7 @@ final class ThemeDetectorTests: XCTestCase {
             )
         )
 
-        adapterStore = try await DefaultAdapterStore.createInMemory()
+        adapterStore = TestAdapterStore(bundles: [])
 
         detector = ThemeDetector(
             adapterStore: adapterStore,
@@ -222,8 +222,7 @@ final class ThemeDetectorTests: XCTestCase {
             bundleData: Data("test".utf8),
             sourceRepositoryURL: "https://example.org"
         )
-        let entity = InstalledAdapterEntity(bundle: bundle)
-        try await adapterStore.insertInstalledAdapterForTesting(entity)
+        adapterStore.bundles.append(bundle)
     }
 
     private func makeTestSelectors() -> ThemeSelectors {

@@ -212,6 +212,15 @@ public actor JSPluginRuntime {
         return try decode([Page].self, from: json)
     }
 
+    public func extractGenres(
+        mapping: GenreMapping,
+        in page: PluginPageContext
+    ) async throws -> ExtractedGenres {
+        let arguments = try encode(mapping)
+        let json = try await invoke(method: "extractGenres", argumentsJSON: arguments, in: page)
+        return try decode(ExtractedGenres.self, from: json)
+    }
+
     /// Releases documents and bridge globals. Later calls throw `.disposed`.
     public func dispose() {
         guard !disposed else {
