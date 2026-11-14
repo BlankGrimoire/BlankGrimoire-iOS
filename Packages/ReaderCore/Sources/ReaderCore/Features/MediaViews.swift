@@ -20,6 +20,8 @@
         var siteBaseURL: String? = nil
         var contentMode: ContentMode = .fill
         var placeholderIcon: String = "book.closed"
+        /// Bumped by the reader to force a fresh request for the same URL.
+        var reloadID: Int = 0
 
         @State private var image: UIImage?
         @State private var isLoading = false
@@ -34,7 +36,7 @@
                     placeholder
                 }
             }
-            .task(id: url) {
+            .task(id: "\(url ?? "")-\(reloadID)") {
                 await load()
             }
         }
