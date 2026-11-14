@@ -4,6 +4,7 @@ import ReaderCore
 import SwiftData
 import XCTest
 
+@MainActor
 final class ThemeDetectorTests: XCTestCase {
 
     private var detector: ThemeDetector!
