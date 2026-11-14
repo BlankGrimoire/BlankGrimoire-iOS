@@ -137,6 +137,7 @@
                             url: page.imageURL,
                             loader: dependencies.imageLoader,
                             headers: page.headers,
+                            siteBaseURL: viewModel.manga.siteURL,
                             contentMode: .fit,
                             placeholderIcon: "photo"
                         )
@@ -167,6 +168,7 @@
                         url: page.imageURL,
                         loader: dependencies.imageLoader,
                         headers: page.headers,
+                        siteBaseURL: viewModel.manga.siteURL,
                         contentMode: .fit,
                         placeholderIcon: "photo"
                     )
@@ -196,7 +198,11 @@
                 }
                 return page.imageURL
             }
-            await loader.prefetch(urls, headers: headers)
+            await loader.prefetch(
+                urls,
+                headers: headers,
+                siteBaseURL: viewModel.manga.siteURL
+            )
         }
 
         private static func allowedHosts(for manga: MangaEntity) -> Set<String> {

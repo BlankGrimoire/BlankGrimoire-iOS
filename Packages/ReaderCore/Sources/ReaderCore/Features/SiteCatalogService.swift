@@ -56,19 +56,28 @@ public final class SiteCatalogService: SiteCatalogProviding {
     // MARK: - Search
 
     public func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome {
-        await runSearch(query: query, profiles: profiles, startURLs: nil)
+        await runSearch(query: query, profiles: profiles, startURLs: nil, genreValues: [:])
+    }
+
+    public func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome {
+        await runSearch(query: query, profiles: profiles, startURLs: nil, genreValues: genreValues)
     }
 
     public func searchNextPage(
         query: SearchQuery,
         in profiles: [SiteProfile],
-        continuingFrom outcome: SiteSearchOutcome
+        continuingFrom outcome: SiteSearchOutcome,
+        genreValues: [String: String] = [:]
     ) async -> SiteSearchOutcome {
         let startURLs = outcome.nextPageURLs
         guard !startURLs.isEmpty else {
             return SiteSearchOutcome()
         }
-        return await runSearch(query: query, profiles: profiles, startURLs: startURLs)
+        return await runSearch(query: query, profiles: profiles, startURLs: startURLs, genreValues: genreValues)
     }
 
     /// Shared implementation for the first page and the follow-up pages.
@@ -79,7 +88,8 @@ public final class SiteCatalogService: SiteCatalogProviding {
     private func runSearch(
         query: SearchQuery,
         profiles: [SiteProfile],
-        startURLs: [String: String]?
+        startURLs: [String: String]?,
+        genreValues: [String: String]
     ) async -> SiteSearchOutcome {
         let trimmed = query.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty || !(query.genres?.isEmpty ?? true) else {
@@ -120,11 +130,15 @@ public final class SiteCatalogService: SiteCatalogProviding {
                             )
                         )
                     }
+                    let genreValue =
+                        genreValues[profile.id]
+                        ?? (genreValues.isEmpty ? query.genres?.first : nil)
                     return await self.searchWithTimeout(
                         profile: profile,
-                        query: trimmed,
+                        query: query,
                         page: pageNumber,
-                        startURL: startURLs?[profile.id]
+                        startURL: startURLs?[profile.id],
+                        genreValue: genreValue
                     )
                 }
             }
@@ -156,11 +170,15 @@ public final class SiteCatalogService: SiteCatalogProviding {
                                 )
                             )
                         }
+                        let genreValue =
+                            genreValues[profile.id]
+                            ?? (genreValues.isEmpty ? query.genres?.first : nil)
                         return await self.searchWithTimeout(
                             profile: profile,
-                            query: trimmed,
+                            query: query,
                             page: pageNumber,
-                            startURL: startURLs?[profile.id]
+                            startURL: startURLs?[profile.id],
+                            genreValue: genreValue
                         )
                     }
                 }
@@ -190,14 +208,21 @@ public final class SiteCatalogService: SiteCatalogProviding {
     /// A site that never answers must not block the cross-site results.
     private func searchWithTimeout(
         profile: SiteProfile,
-        query: String,
+        query: SearchQuery,
         page: Int,
         startURL: String?,
+        genreValue: String?,
         timeout: Duration = .seconds(20)
     ) async -> SiteSearchSiteOutcome {
         await withTaskGroup(of: SiteSearchSiteOutcome?.self) { group in
             group.addTask {
-                await self.search(profile: profile, query: query, page: page, startURL: startURL)
+                await self.search(
+                    profile: profile,
+                    query: query,
+                    page: page,
+                    startURL: startURL,
+                    genreValue: genreValue
+                )
             }
             group.addTask {
                 try? await Task.sleep(for: timeout)
@@ -220,9 +245,10 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     private func search(
         profile: SiteProfile,
-        query: String,
+        query: SearchQuery,
         page: Int,
-        startURL: String?
+        startURL: String?,
+        genreValue: String?
     ) async -> SiteSearchSiteOutcome {
         do {
             let lease = try await sessionPool.acquire(
@@ -238,7 +264,12 @@ public final class SiteCatalogService: SiteCatalogProviding {
             if let startURL, let url = URL(string: startURL) {
                 searchURL = url
             } else {
-                searchURL = try makeSearchURL(profile: profile, bundle: session.bundle, query: query)
+                searchURL = try makeSearchURL(
+                    profile: profile,
+                    bundle: session.bundle,
+                    query: query,
+                    genreValue: genreValue
+                )
             }
             let html = try await fetchHTML(searchURL, session: session, profile: profile)
             let context = PluginPageContext(
@@ -248,7 +279,12 @@ public final class SiteCatalogService: SiteCatalogProviding {
                 overrides: profile.selectorOverrides
             )
             let resultPage = try await session.runtime.search(
-                SearchQuery(text: query, page: page),
+                SearchQuery(
+                    text: query.text,
+                    page: page,
+                    filters: query.filters,
+                    genres: query.genres
+                ),
                 in: context
             )
             let results = resultPage.items.map { summary in
@@ -288,18 +324,34 @@ public final class SiteCatalogService: SiteCatalogProviding {
         }
     }
 
-    private func makeSearchURL(profile: SiteProfile, bundle: AdapterBundle, query: String) throws -> URL {
+    private func makeSearchURL(
+        profile: SiteProfile,
+        bundle: AdapterBundle,
+        query: SearchQuery,
+        genreValue: String?
+    ) throws -> URL {
         guard let baseURL = URL(string: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
         }
 
+        let text = query.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let genre = genreValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // A selected genre has its own discovery URL, which is independent
+        // from the free-text search path.
+        if let genre, !genre.isEmpty,
+            let genreURL = try makeGenreURL(profile: profile, bundle: bundle, genre: genre, baseURL: baseURL)
+        {
+            return genreURL
+        }
+
         let path = profile.selectorOverrides.search?.path ?? bundle.themeAdapter.selectors.search.path
         let encodedQuery =
-            query.addingPercentEncoding(
+            text.addingPercentEncoding(
                 withAllowedCharacters: CharacterSet.urlQueryAllowed.subtracting(
                     CharacterSet(charactersIn: "&=?#")
                 )
-            ) ?? query
+            ) ?? text
 
         if path.contains("{query}") {
             let expanded = path.replacingOccurrences(of: "{query}", with: encodedQuery)
@@ -324,7 +376,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         var items = components.queryItems ?? []
         let parameterName = items.first { $0.value?.isEmpty != false }?.name ?? "q"
         items.removeAll { $0.name == parameterName }
-        items.append(URLQueryItem(name: parameterName, value: query))
+        items.append(URLQueryItem(name: parameterName, value: text))
         components.queryItems = items
         // URLComponents leaves `+` as-is in query values, but servers decode it
         // as a space; force the percent-encoded form (`C++` -> `C%2B%2B`).
@@ -333,6 +385,71 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
         guard let url = components.url else {
             throw SiteBrowsingError.invalidSearchURL(path)
+        }
+        try validateSameSite(url, profile: profile)
+        return url
+    }
+
+    /// Builds the URL used when the user filters by a genre.
+    ///
+    /// `filterPath` takes precedence (`/genre/{genre}`); when it has no
+    /// placeholder the genre is appended as the configured query parameter.
+    /// Returns nil when the adapter does not declare a genre filter, so the
+    /// caller can fall back to the normal text search.
+    private func makeGenreURL(
+        profile: SiteProfile,
+        bundle: AdapterBundle,
+        genre: String,
+        baseURL: URL
+    ) throws -> URL? {
+        guard let genreSelectors = bundle.themeAdapter.selectors.genre else {
+            return nil
+        }
+
+        let encodedGenre =
+            genre.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? genre
+
+        if let filterPath = genreSelectors.filterPath, !filterPath.isEmpty {
+            if filterPath.contains("{genre}") {
+                let expanded = filterPath.replacingOccurrences(of: "{genre}", with: encodedGenre)
+                guard let url = URL(string: expanded, relativeTo: baseURL)?.absoluteURL else {
+                    throw SiteBrowsingError.invalidSearchURL(filterPath)
+                }
+                try validateSameSite(url, profile: profile)
+                return url
+            }
+
+            let parameter = genreSelectors.filterParam ?? "genre"
+            guard
+                var components = URLComponents(
+                    url: URL(string: filterPath, relativeTo: baseURL)?.absoluteURL ?? baseURL,
+                    resolvingAgainstBaseURL: false
+                )
+            else {
+                throw SiteBrowsingError.invalidSearchURL(filterPath)
+            }
+            var items = components.queryItems ?? []
+            items.removeAll { $0.name == parameter }
+            items.append(URLQueryItem(name: parameter, value: genre))
+            components.queryItems = items
+            guard let url = components.url else {
+                throw SiteBrowsingError.invalidSearchURL(filterPath)
+            }
+            try validateSameSite(url, profile: profile)
+            return url
+        }
+
+        guard let parameter = genreSelectors.filterParam, !parameter.isEmpty,
+            var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        else {
+            return nil
+        }
+        var items = components.queryItems ?? []
+        items.removeAll { $0.name == parameter }
+        items.append(URLQueryItem(name: parameter, value: genre))
+        components.queryItems = items
+        guard let url = components.url else {
+            throw SiteBrowsingError.invalidSearchURL(baseURL.absoluteString)
         }
         try validateSameSite(url, profile: profile)
         return url
@@ -639,13 +756,16 @@ public final class SiteCatalogService: SiteCatalogProviding {
     }
 
     private func makeGenresURL(profile: SiteProfile, bundle: AdapterBundle) throws -> URL {
-        let baseURL = URL(string: profile.baseURL)!
-        let genrePaths = ["/genre", "/genres", "/genre-list", "/category", "/categories"]
+        guard let baseURL = URL(string: profile.baseURL) else {
+            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
+        }
 
-        for path in genrePaths {
-            if let url = URL(string: path, relativeTo: baseURL) {
-                return url
-            }
+        // `source` is a CSS selector, so the page that lists the genres is
+        // declared separately. Default to the site root. Never probe a
+        // hardcoded list of genre paths: the adapter decides where they live.
+        let pagePath = bundle.themeAdapter.selectors.genre?.pagePath ?? "/"
+        if let url = URL(string: pagePath, relativeTo: baseURL)?.absoluteURL {
+            return url
         }
         return baseURL
     }

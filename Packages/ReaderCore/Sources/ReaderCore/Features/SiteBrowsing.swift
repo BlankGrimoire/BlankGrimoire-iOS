@@ -75,6 +75,15 @@ public struct SiteSearchOutcome: Sendable, Equatable {
 @MainActor
 public protocol SiteCatalogProviding: Sendable {
     func search(_ query: SearchQuery, in profiles: [SiteProfile]) async -> SiteSearchOutcome
+    /// Search with the per-site genre value chosen from a unified genre.
+    ///
+    /// Sites may use different slugs for the same display name, so the
+    /// caller passes the value extracted from each site's own genre list.
+    func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome
     /// Loads the next result page for the sites that announced one.
     ///
     /// Pass the previous outcome: implementations use its `nextPageURLs` to
@@ -94,6 +103,14 @@ public protocol SiteCatalogProviding: Sendable {
 }
 
 extension SiteCatalogProviding {
+    public func search(
+        _ query: SearchQuery,
+        in profiles: [SiteProfile],
+        genreValues: [String: String]
+    ) async -> SiteSearchOutcome {
+        await search(query, in: profiles)
+    }
+
     /// Catalogs that do not paginate report that no further page exists.
     public func searchNextPage(
         query: SearchQuery,

@@ -108,7 +108,8 @@ public actor RemoteThemeSource: ThemeSource {
                 chapters: .init(item: "", link: "", title: nil, date: nil, order: "desc"),
                 pages: .init(strategies: []),
                 attribution: nil
-            )
+            ),
+            referrerHeaders: [:]
         )
     }
 

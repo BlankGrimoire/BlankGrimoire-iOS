@@ -7,6 +7,67 @@ import Foundation
     import UIKit
 #endif
 
+/// Global registry for CDN referrer headers.
+/// Themes register their CDN referrer headers here so the image pipeline can
+/// inject the correct Referer header when downloading images.
+public actor ReferrerRegistry {
+    private var referrerHeaders: [String: String] = [:]
+
+    public static let shared = ReferrerRegistry()
+
+    private init() {}
+
+    /// Registers a single referrer for a CDN host.
+    public func register(_ host: String, referrer: String) {
+        referrerHeaders[host.lowercased()] = referrer
+    }
+
+    /// Registers referrer headers from a theme adapter.
+    public func register(_ referrerHeaders: [String: String]) {
+        for (cdnHost, referrer) in referrerHeaders {
+            self.referrerHeaders[cdnHost] = referrer
+        }
+    }
+
+    /// Registers the CDN maps declared by a set of themes.
+    public func register(themes: [ThemeAdapter]) {
+        for theme in themes where !theme.referrerHeaders.isEmpty {
+            register(theme.referrerHeaders)
+        }
+    }
+
+    /// Unregisters referrer headers for a theme adapter.
+    public func unregister(_ cdnHosts: [String]) {
+        for host in cdnHosts {
+            self.referrerHeaders.removeValue(forKey: host)
+        }
+    }
+
+    /// Returns the current referrer headers.
+    public func allHeaders() -> [String: String] {
+        referrerHeaders
+    }
+
+    /// Looks up the referrer for a specific CDN host.
+    public func referrer(for host: String) -> String? {
+        let lowercased = host.lowercased()
+        // Exact match first
+        if let referrer = referrerHeaders[lowercased] {
+            return referrer
+        }
+        // Subdomain match (e.g., *.img.example.org matches img.example.org)
+        for (pattern, referrer) in referrerHeaders {
+            if pattern.hasPrefix("*.") {
+                let suffix = pattern.dropFirst(2)
+                if lowercased.hasSuffix("." + suffix) || lowercased == suffix {
+                    return referrer
+                }
+            }
+        }
+        return nil
+    }
+}
+
 /// Configuration for the image pipeline.
 public struct ImagePipelineConfiguration: Sendable {
     /// Maximum number of concurrent downloads.
@@ -193,7 +254,8 @@ public actor ImagePipeline {
     public func fetch(
         _ url: String,
         headers: [String: String]? = nil,
-        progress: ImageProgressCallback? = nil
+        progress: ImageProgressCallback? = nil,
+        siteBaseURL: String? = nil
     ) async throws -> ImageResult {
         // Validate URL
         guard let url = URL(string: url) else {
@@ -227,7 +289,7 @@ public actor ImagePipeline {
             task = existing.task
         } else {
             let newTask = Task {
-                try await self.downloadAndCache(url, headers: headers, cacheKey: cacheKey)
+                try await self.downloadAndCache(url, headers: headers, cacheKey: cacheKey, siteBaseURL: siteBaseURL)
             }
             var request = InFlightRequest(task: newTask)
             request.waiters.insert(token)
@@ -283,6 +345,7 @@ public actor ImagePipeline {
     public func prefetch(
         _ urls: [String],
         headers: [String: [String: String]] = [:],
+        siteBaseURL: String? = nil,
         priority: TaskPriority = .background
     ) async -> [String: Result<ImageResult, Error>] {
         var results: [String: Result<ImageResult, Error>] = [:]
@@ -292,7 +355,11 @@ public actor ImagePipeline {
                 let urlHeaders = headers[url]
                 group.addTask(priority: priority) {
                     do {
-                        let result = try await self.fetch(url, headers: urlHeaders)
+                        let result = try await self.fetch(
+                            url,
+                            headers: urlHeaders,
+                            siteBaseURL: siteBaseURL
+                        )
                         return (url, .success(result))
                     } catch {
                         return (url, .failure(error))
@@ -362,72 +429,157 @@ public actor ImagePipeline {
     private func downloadAndCache(
         _ url: URL,
         headers: [String: String]?,
-        cacheKey: String
+        cacheKey: String,
+        siteBaseURL: String? = nil
     ) async throws -> ImageResult {
-        try Task.checkCancellation()
-        await semaphore.wait()
-        defer { semaphore.signal() }
-        try Task.checkCancellation()
-
-        var request = URLRequest(url: url)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        for (field, value) in headers ?? [:] where !Self.isReservedHeader(field) {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
-        // Reuse cookies obtained by the visible verification browser.
-        Self.applyChallengeCookies(to: &request, url: url)
-
-        logger.log("Downloading: \(url.absoluteString)", level: .info)
-
-        let (bytes, response) = try await session.bytes(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ImagePipelineError.invalidResponse
+        // Local helper for host pattern matching
+        func hostMatches(_ host: String, pattern: String) -> Bool {
+            let pattern = pattern.lowercased()
+            guard !pattern.isEmpty else { return false }
+            if pattern == host { return true }
+            if pattern.hasPrefix("*.") {
+                let suffix = String(pattern.dropFirst(2))
+                return host == suffix || host.hasSuffix("." + suffix)
+            }
+            return host.hasSuffix("." + pattern)
         }
 
-        guard (200...299).contains(httpResponse.statusCode) else {
-            throw ImagePipelineError.networkError("HTTP \(httpResponse.statusCode)")
-        }
+        // Extract site host for referrer fallback logic
+        let siteHost = siteBaseURL.flatMap { URL(string: $0)?.host?.lowercased() }
 
-        if let expected = httpResponse.expectedContentLength as Int64?,
-            expected > Int64(configuration.maxImageBytes)
-        {
-            throw ImagePipelineError.responseTooLarge(configuration.maxImageBytes)
-        }
+        // Try with registered referrer first, then fallback to site baseURL
+        func attemptDownload(with referrer: String?) async throws -> (Data, HTTPURLResponse) {
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            for (field, value) in headers ?? [:] where !Self.isReservedHeader(field) {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+            Self.applyChallengeCookies(to: &request, url: url)
 
-        let expectedLength =
-            httpResponse.expectedContentLength > 0
-            ? httpResponse.expectedContentLength
-            : nil
-        var data = Data()
-        data.reserveCapacity(min(configuration.maxImageBytes, 64 * 1024))
-        var sinceLastReport = 0
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            if data.count >= configuration.maxImageBytes {
+            if let referrer = referrer {
+                request.setValue(referrer, forHTTPHeaderField: "Referer")
+            }
+
+            logger.log("Downloading: \(url.absoluteString)\(referrer.map { " (Referer: \($0))" } ?? "")", level: .info)
+
+            let (bytes, response) = try await session.bytes(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw ImagePipelineError.invalidResponse
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                throw ImagePipelineError.networkError("HTTP \(httpResponse.statusCode)")
+            }
+
+            if let expected = httpResponse.expectedContentLength as Int64?,
+                expected > Int64(configuration.maxImageBytes)
+            {
                 throw ImagePipelineError.responseTooLarge(configuration.maxImageBytes)
             }
-            data.append(byte)
-            sinceLastReport += 1
-            if sinceLastReport >= 64 * 1024 {
-                sinceLastReport = 0
-                reportProgress(cacheKey: cacheKey, received: Int64(data.count), total: expectedLength)
+
+            let expectedLength =
+                httpResponse.expectedContentLength > 0
+                ? httpResponse.expectedContentLength
+                : nil
+            var data = Data()
+            data.reserveCapacity(min(configuration.maxImageBytes, 64 * 1024))
+            var sinceLastReport = 0
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if data.count >= configuration.maxImageBytes {
+                    throw ImagePipelineError.responseTooLarge(configuration.maxImageBytes)
+                }
+                data.append(byte)
+                sinceLastReport += 1
+                if sinceLastReport >= 64 * 1024 {
+                    sinceLastReport = 0
+                    reportProgress(cacheKey: cacheKey, received: Int64(data.count), total: expectedLength)
+                }
             }
+            reportProgress(cacheKey: cacheKey, received: Int64(data.count), total: expectedLength)
+            try Self.validateImageData(data, mimeType: httpResponse.mimeType)
+
+            return (data, httpResponse)
         }
-        reportProgress(cacheKey: cacheKey, received: Int64(data.count), total: expectedLength)
-        try Self.validateImageData(data, mimeType: httpResponse.mimeType)
 
-        // Cache the result
-        await cache.setData(data, for: cacheKey)
+        // First attempt: use a referrer already known for this host (declared by
+        // the theme or learned from an earlier request).
+        let imageHost = url.host?.lowercased()
+        var registeredReferrer: String?
+        if let imageHost {
+            registeredReferrer = await ReferrerRegistry.shared.referrer(for: imageHost)
+        }
 
-        logger.log("Downloaded: \(url.absoluteString) (\(data.count) bytes)", level: .info)
+        do {
+            let (data, response) = try await attemptDownload(with: registeredReferrer)
 
-        return ImageResult(
-            data: data,
-            mimeType: httpResponse.mimeType,
-            fromCache: false,
-            originalURL: url.absoluteString
-        )
+            // Remember a referrer that turned out to work so later requests for
+            // the same host skip the failing attempt.
+            if let host = imageHost, let referrer = registeredReferrer {
+                await ReferrerRegistry.shared.register(host, referrer: referrer)
+            }
+
+            // Cache the result
+            await cache.setData(data, for: cacheKey)
+
+            logger.log("Downloaded: \(url.absoluteString) (\(data.count) bytes)", level: .info)
+
+            return ImageResult(
+                data: data,
+                mimeType: response.mimeType,
+                fromCache: false,
+                originalURL: url.absoluteString
+            )
+        } catch ImagePipelineError.networkError(let message)
+            where message == "HTTP 403" || message == "HTTP 401"
+        {
+            // The CDN may require the site that hosts the page as its referrer.
+            // Try the origin first (many CDNs compare against the bare
+            // origin), then the full page URL (some CDNs compare against the
+            // page). Learn the mapping so the CDN domain never has to be
+            // hardcoded.
+            guard let siteBaseURL else {
+                throw ImagePipelineError.networkError(message)
+            }
+            guard siteHost != imageHost else {
+                throw ImagePipelineError.networkError(message)
+            }
+
+            for siteReferrer in Self.referrerCandidates(from: siteBaseURL)
+            where siteReferrer != registeredReferrer {
+                logger.log(
+                    "Retrying \(url.absoluteString) with site referrer: \(siteReferrer)",
+                    level: .info
+                )
+                do {
+                    let (data, response) = try await attemptDownload(with: siteReferrer)
+
+                    if let host = imageHost {
+                        await ReferrerRegistry.shared.register(host, referrer: siteReferrer)
+                    }
+
+                    await cache.setData(data, for: cacheKey)
+
+                    logger.log(
+                        "Downloaded (with site referrer): \(url.absoluteString) (\(data.count) bytes)",
+                        level: .info
+                    )
+
+                    return ImageResult(
+                        data: data,
+                        mimeType: response.mimeType,
+                        fromCache: false,
+                        originalURL: url.absoluteString
+                    )
+                } catch {
+                    continue
+                }
+            }
+
+            // Preserve the original status when no retry helps.
+            throw ImagePipelineError.networkError(message)
+        }
     }
 
     // MARK: - Request validation
@@ -464,6 +616,32 @@ public actor ImagePipeline {
             return host == suffix || host.hasSuffix("." + suffix)
         }
         return host.hasSuffix("." + pattern)
+    }
+
+    /// Returns the `Referer` candidates to try when a CDN rejects a request.
+    ///
+    /// The origin is tried first because CDNs commonly compare the header
+    /// against the bare origin; the full page URL is kept as a second attempt
+    /// for CDNs that compare against the page. Both are derived from the
+    /// caller's site URL, so no CDN domain is hardcoded.
+    static func referrerCandidates(from siteURL: String) -> [String] {
+        let origin = referrerValue(from: siteURL)
+        guard let url = URL(string: siteURL), !url.path.isEmpty, url.path != "/" else {
+            return [origin]
+        }
+        return [origin, url.absoluteString]
+    }
+
+    /// Normalizes a site URL into a `Referer` value.
+    ///
+    /// Always the bare origin with a trailing slash, because CDNs commonly
+    /// compare the header against `https://host/`.
+    private static func referrerValue(from siteURL: String) -> String {
+        guard let url = URL(string: siteURL), let scheme = url.scheme, let host = url.host else {
+            return siteURL
+        }
+        let authority = url.port.map { "\(host):\($0)" } ?? host
+        return "\(scheme)://\(authority)/"
     }
 
     /// Rejects loopback, link-local, private and single-label hosts.

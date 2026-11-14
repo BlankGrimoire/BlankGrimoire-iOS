@@ -134,7 +134,8 @@
                             .css(CSSStrategy(image: ".reader img", srcAttributes: ["data-src"]))
                         ]),
                         attribution: .init(logo: ".logo img", credits: ".credits")
-                    )
+                    ),
+                    referrerHeaders: [:]
                 ),
                 ThemeAdapter(
                     id: "theme.sample",
@@ -155,7 +156,8 @@
                             .css(CSSStrategy(image: ".page img", srcAttributes: ["src"]))
                         ]),
                         attribution: .init(logo: ".logo img", credits: ".credits")
-                    )
+                    ),
+                    referrerHeaders: [:]
                 ),
             ]
         }

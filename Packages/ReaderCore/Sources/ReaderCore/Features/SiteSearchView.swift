@@ -14,7 +14,10 @@
     public final class SiteSearchViewModel {
         public var query: String = ""
         public var selectedSiteID: String?
-        public var selectedGenres: Set<String> = []
+        public var selectedGenre: String? = nil
+        /// Extracted from the enabled sites when the screen loads. Starts empty
+        /// on purpose: the app never ships or restores a built-in genre list.
+        public private(set) var unifiedGenres: [UnifiedGenre] = []
         public var sites: [SiteProfile] = []
         public private(set) var results: [SiteSearchResult] = []
         public private(set) var failures: [SiteSearchFailure] = []
@@ -79,8 +82,22 @@
                 if let selectedSiteID, !sites.contains(where: { $0.id == selectedSiteID }) {
                     self.selectedSiteID = nil
                 }
+                await loadUnifiedGenres()
             } catch {
                 lastError = error
+            }
+        }
+
+        private func loadUnifiedGenres() async {
+            guard let catalogService else { return }
+            let enabled = sites.filter(\.isEnabled)
+            guard !enabled.isEmpty else {
+                unifiedGenres = []
+                return
+            }
+            unifiedGenres = await catalogService.fetchUnifiedGenres(for: enabled)
+            if let sel = selectedGenre, !unifiedGenres.contains(where: { $0.id == sel.lowercased() }) {
+                selectedGenre = nil
             }
         }
 
@@ -90,9 +107,13 @@
                 return
             }
 
+            await loadSites()
+
             let searchQuery = SearchQuery(
-                text: query.trimmingCharacters(in: .whitespacesAndNewlines), page: 1, genres: Array(selectedGenres))
-            guard !searchQuery.text!.isEmpty || !searchQuery.genres!.isEmpty else {
+                text: query.trimmingCharacters(in: .whitespacesAndNewlines),
+                page: 1,
+                genres: selectedGenre.map { [$0] })
+            guard !searchQuery.text!.isEmpty || !(searchQuery.genres?.isEmpty ?? true) else {
                 results = []
                 failures = []
                 hasSearched = false
@@ -100,8 +121,6 @@
                 nextPageURLs = [:]
                 return
             }
-
-            await loadSites()
 
             let targets = targetSites
             guard !targets.isEmpty else {
@@ -123,7 +142,15 @@
                 }
             }
 
-            let outcome = await catalogService.search(searchQuery, in: targets)
+            let genre = selectedGenre.flatMap { id in
+                unifiedGenres.first { $0.id == id }
+            }
+            let genreValues =
+                genre.map { genre in
+                    Dictionary(uniqueKeysWithValues: genre.siteFilters.map { ($0.key, $0.value.value) })
+                } ?? [:]
+
+            let outcome = await catalogService.search(searchQuery, in: targets, genreValues: genreValues)
             guard generation == searchGeneration, !Task.isCancelled else { return }
             results = outcome.results
             failures = outcome.failures
@@ -145,8 +172,10 @@
             }
 
             let searchQuery = SearchQuery(
-                text: query.trimmingCharacters(in: .whitespacesAndNewlines), page: 1, genres: Array(selectedGenres))
-            guard !searchQuery.text!.isEmpty || !searchQuery.genres!.isEmpty else { return }
+                text: query.trimmingCharacters(in: .whitespacesAndNewlines),
+                page: 1,
+                genres: selectedGenre.map { [$0] })
+            guard !searchQuery.text!.isEmpty || !(searchQuery.genres?.isEmpty ?? true) else { return }
 
             let outcome = SiteSearchOutcome(
                 results: results,
@@ -212,6 +241,8 @@
         public func reset() {
             searchGeneration += 1
             query = ""
+            selectedGenre = nil
+            unifiedGenres = []
             results = []
             failures = []
             nextPageURLs = [:]
@@ -287,7 +318,8 @@
                         Image(systemName: "magnifyingglass")
                     }
                     .disabled(
-                        viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        (viewModel.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && viewModel.selectedGenre == nil)
                             || viewModel.isSearching
                     )
                 }
@@ -296,6 +328,10 @@
                 await viewModel.loadSites()
             }
             .onChange(of: viewModel.selectedSiteID) {
+                guard viewModel.hasSearched else { return }
+                Task { await viewModel.search() }
+            }
+            .onChange(of: viewModel.selectedGenre) {
                 guard viewModel.hasSearched else { return }
                 Task { await viewModel.search() }
             }
@@ -341,13 +377,6 @@
             }
         }
 
-        private static let commonGenres: Set<String> = [
-            "action", "adventure", "comedy", "drama", "fantasy", "horror",
-            "isekai", "romance", "sci-fi", "slice-of-life", "sports",
-            "supernatural", "thriller", "historical", "psychological",
-            "mystery", "ecchi", "harem", "shounen", "shoujo", "seinen", "josei",
-        ]
-
         private var resultsList: some View {
             List {
                 if viewModel.isSearching {
@@ -371,10 +400,16 @@
                 }
 
                 Section {
-                    Picker("Genres", selection: $viewModel.selectedGenres) {
-                        Text("All Genres").tag(Set<String>())
-                        ForEach(Array(Self.commonGenres).sorted(), id: \.self) { genre in
-                            Text(genre.capitalized).tag(Set([genre]))
+                    Picker("Genere", selection: $viewModel.selectedGenre) {
+                        Text("Tutti i generi").tag(String?.none)
+                        ForEach(viewModel.unifiedGenres) { genre in
+                            HStack {
+                                Text(genre.displayName)
+                                if genre.siteFilters.count > 1 {
+                                    Text("(\(genre.siteFilters.count) siti)")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }.tag(Optional(genre.id))
                         }
                     }
                     .pickerStyle(.menu)
@@ -443,9 +478,13 @@
 
         private func resultRow(_ result: SiteSearchResult) -> some View {
             HStack(spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(url: result.coverURL, loader: dependencies.imageLoader)
-                    .frame(width: 56, height: 80)
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+                MangaCoverImage(
+                    url: result.coverURL,
+                    loader: dependencies.imageLoader,
+                    siteBaseURL: result.siteURL
+                )
+                .frame(width: 56, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(result.title)

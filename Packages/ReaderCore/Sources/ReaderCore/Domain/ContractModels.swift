@@ -482,7 +482,12 @@ public struct ThemeSelectors: Codable, Sendable, Equatable {
     }
 
     public struct GenreSelectors: Codable, Sendable, Equatable {
+        /// CSS selector that matches the genre links/items on `pagePath`.
         public let source: String
+        /// Page used to discover the available genres. Defaults to the site root.
+        public let pagePath: String?
+        /// URL template for a genre result page, for example `/genre/{genre}`.
+        public let filterPath: String?
         public let displayNameAttr: String?
         public let valueAttr: String?
         public let valuePattern: String?
@@ -490,12 +495,16 @@ public struct ThemeSelectors: Codable, Sendable, Equatable {
 
         public init(
             source: String,
+            pagePath: String? = nil,
+            filterPath: String? = nil,
             displayNameAttr: String? = nil,
             valueAttr: String? = nil,
             valuePattern: String? = nil,
             filterParam: String? = nil
         ) {
             self.source = source
+            self.pagePath = pagePath
+            self.filterPath = filterPath
             self.displayNameAttr = displayNameAttr
             self.valueAttr = valueAttr
             self.valuePattern = valuePattern
@@ -725,19 +734,45 @@ public struct ThemeAdapter: Codable, Sendable, Equatable, Identifiable {
     public let version: String
     public let detectionSignature: ThemeSignature
     public let selectors: ThemeSelectors
+    public let referrerHeaders: [String: String]
 
     public init(
         id: String,
         name: String,
         version: String,
         detectionSignature: ThemeSignature,
-        selectors: ThemeSelectors
+        selectors: ThemeSelectors,
+        referrerHeaders: [String: String] = [:]
     ) {
         self.id = id
         self.name = name
         self.version = version
         self.detectionSignature = detectionSignature
         self.selectors = selectors
+        self.referrerHeaders = referrerHeaders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, version, detectionSignature, selectors, referrerHeaders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        version = try container.decode(String.self, forKey: .version)
+        detectionSignature = try container.decode(
+            ThemeSignature.self,
+            forKey: .detectionSignature
+        )
+        selectors = try container.decode(ThemeSelectors.self, forKey: .selectors)
+        // Older bundles and manifests predate referrer overrides.
+        referrerHeaders =
+            try container.decodeIfPresent(
+                [String: String].self,
+                forKey: .referrerHeaders
+            ) ?? [:]
     }
 }
 
@@ -953,9 +988,11 @@ public struct AdapterManifest: Codable, Sendable {
     public let apiVersion: Int
     public let detectionSignature: ThemeSignature
     public let sha256: String
+    public let referrerHeaders: [String: String]
 
     public init(
-        id: String, name: String, version: String, apiVersion: Int, detectionSignature: ThemeSignature, sha256: String
+        id: String, name: String, version: String, apiVersion: Int, detectionSignature: ThemeSignature, sha256: String,
+        referrerHeaders: [String: String] = [:]
     ) {
         self.id = id
         self.name = name
@@ -963,10 +1000,11 @@ public struct AdapterManifest: Codable, Sendable {
         self.apiVersion = apiVersion
         self.detectionSignature = detectionSignature
         self.sha256 = sha256
+        self.referrerHeaders = referrerHeaders
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, apiVersion, detectionSignature, sha256
+        case id, name, version, apiVersion, detectionSignature, sha256, referrerHeaders
     }
 
     public init(from decoder: Decoder) throws {
@@ -978,6 +1016,7 @@ public struct AdapterManifest: Codable, Sendable {
         apiVersion = try container.decode(Int.self, forKey: .apiVersion)
         detectionSignature = try container.decode(ThemeSignature.self, forKey: .detectionSignature)
         sha256 = try container.decode(String.self, forKey: .sha256)
+        referrerHeaders = try container.decodeIfPresent([String: String].self, forKey: .referrerHeaders) ?? [:]
 
         guard apiVersion == ContractVersion.current else {
             throw DecodingError.dataCorruptedError(

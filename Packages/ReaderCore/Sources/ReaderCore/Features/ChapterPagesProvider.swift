@@ -139,9 +139,6 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         chapter: ChapterEntity,
         profile: SiteProfile
     ) throws -> [PageEntity] {
-        guard let baseHost = URL(string: profile.baseURL)?.host?.lowercased(), !baseHost.isEmpty else {
-            throw SiteBrowsingError.invalidSiteURL(profile.baseURL)
-        }
 
         var seenIndices = Set<Int>()
         var pages: [PageEntity] = []
@@ -151,11 +148,11 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
                 throw SiteBrowsingError.duplicatePageIndex(page.index)
             }
 
+            // Images are static assets; allow any HTTPS URL (CDN may differ from site host).
             guard
                 let url = URL(string: page.imageURL),
                 url.scheme?.lowercased() == "https",
-                let host = url.host?.lowercased(),
-                HostMatcher.matches(pattern: baseHost, host: host)
+                url.host != nil
             else {
                 throw SiteBrowsingError.invalidPageURL(page.imageURL)
             }

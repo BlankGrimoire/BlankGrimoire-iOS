@@ -166,16 +166,20 @@
 
         private var coverSection: some View {
             HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(url: manga.coverURL, loader: dependencies.imageLoader)
-                    .frame(width: 120)
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
-                    .shadow(
-                        color: .black.opacity(DesignTokens.Shadow.md.opacity),
-                        radius: DesignTokens.Shadow.md.radius,
-                        x: DesignTokens.Shadow.md.x,
-                        y: DesignTokens.Shadow.md.y
-                    )
+                MangaCoverImage(
+                    url: manga.coverURL,
+                    loader: dependencies.imageLoader,
+                    siteBaseURL: manga.siteURL
+                )
+                .frame(width: 120)
+                .aspectRatio(2 / 3, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
+                .shadow(
+                    color: .black.opacity(DesignTokens.Shadow.md.opacity),
+                    radius: DesignTokens.Shadow.md.radius,
+                    x: DesignTokens.Shadow.md.x,
+                    y: DesignTokens.Shadow.md.y
+                )
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(manga.title)
