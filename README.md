@@ -51,12 +51,10 @@ gathers everything in a single, private library.
 Requirements: **iPhone or iPad with iOS 17 or newer**.
 
 The app is not on the App Store. Every release publishes an unsigned IPA, so
-you sign it with your own free Apple ID. Full instructions, limits (`3 apps`,
-`7-day signature`) and troubleshooting are in
-[docs/INSTALL.md](docs/INSTALL.md).
+you sign it with your own free Apple ID.
 
-**SideStore / AltStore** — install SideStore once from a computer, then add this
-source:
+**SideStore** — install SideStore once from a computer
+([how it works and how to set it up](docs/INSTALL.md)), then add this source:
 
 ```text
 https://raw.githubusercontent.com/BlankGrimoire/BlankGrimoire-iOS/main/repo.json
@@ -72,6 +70,10 @@ VPN & Device Management*.
 
 > Both routes produce a 7-day signature with a free Apple ID. SideStore renews
 > it automatically; Sideloadly requires a manual reinstall each week.
+>
+> 📖 **For more details see [docs/INSTALL.md](docs/INSTALL.md)** — SideStore
+> setup, the `3 apps` / `7-day signature` limits, automatic renewal and
+> troubleshooting.
 
 ## Usage
 
