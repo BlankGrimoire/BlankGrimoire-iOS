@@ -17,8 +17,9 @@ and no pre-configured websites. You add the websites you already visit; the app
 recognises common site structures through open-source *theme adapters* and
 gathers everything in a single, private library.
 
-> ⚠️ **Status:** early development. Version `1.0.0` is published and
-> installable by sideloading — see [Install](#install).
+> ⚠️ **Status:** early development. Release
+> [![latest release](https://img.shields.io/github/v/release/BlankGrimoire/BlankGrimoire-iOS?label=version&color=6C4AB6)](https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/latest)
+> is published and installable by sideloading — see [Install](#install).
 
 ## Features
 
