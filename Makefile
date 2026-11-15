@@ -50,7 +50,7 @@ RED = \033[0;31m
 NC = \033[0m
 
 .PHONY: help gen generate build test format lint sync-sdk sync-sdk-release \
-	verify-sdk update-sdk-assets clean clean-xattrs test-readercore ci
+	verify-sdk update-sdk-assets clean clean-xattrs test-readercore ci ipa
 
 help:
 	@echo "$(GREEN)BlankGrimoire iOS Makefile$(NC)"
@@ -58,6 +58,7 @@ help:
 	@echo "Usage:"
 	@echo "  make gen           Generate Xcode project with xcodegen (alias: generate)"
 	@echo "  make build         Build app for simulator"
+	@echo "  make ipa           Build the unsigned sideloading IPA + repo.json (release/)"
 	@echo "  make test          Run app unit tests"
 	@echo "  make test-readercore  Run ReaderCore package tests"
 	@echo "  make format        Format code with swift-format"
@@ -91,6 +92,13 @@ build: generate
 		-destination '$(DESTINATION)' \
 		CODE_SIGNING_ALLOWED=NO \
 		GCC_TREAT_WARNINGS_AS_ERRORS=YES
+
+# Unsigned sideloading build: an IPA that SideStore/AltStore/Sideloadly sign with
+# a personal Apple ID. It also refreshes repo.json for the current release.
+ipa: generate
+	@VERSION=$$(sed -nE 's/^ *MARKETING_VERSION: ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' $(PROJECT_YML) | head -1); \
+	echo "$(GREEN)Building unsigned IPA for $$VERSION...$(NC)"; \
+	bash scripts/build-release.sh "$$VERSION"
 
 test: generate
 	@echo "$(GREEN)Running app tests...$(NC)"

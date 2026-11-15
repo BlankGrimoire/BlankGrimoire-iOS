@@ -41,6 +41,20 @@ open BlankGrimoire.xcodeproj
 (`READERCORE_SCRATCH=~/Library/Caches/BlankGrimoire/ReaderCoreBuild`). Point it
 elsewhere with `READERCORE_SCRATCH=/path` if needed.
 
+## Installing on a device
+
+Every release publishes an unsigned IPA plus a SideStore/AltStore source, so the
+app can be installed for free with a personal Apple ID and renewed without a
+computer. Requirements and limits are documented in
+[docs/INSTALL.md](docs/INSTALL.md).
+
+```text
+https://raw.githubusercontent.com/BlankGrimoire/BlankGrimoire-iOS/main/repo.json
+```
+
+`make ipa` builds the same unsigned IPA locally (`release/`) and refreshes
+`repo.json` for the current version.
+
 ## Project structure
 
 ReaderCore is a single SwiftPM target; its folders are organisational, not

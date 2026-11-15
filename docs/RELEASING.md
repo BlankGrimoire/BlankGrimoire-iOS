@@ -20,23 +20,35 @@ due, runs `scripts/release-prepare.sh` in the `prepare` phase. That script:
 1. updates `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`;
 2. regenerates the Xcode project;
 3. archives the app for `generic/platform=iOS` without code signing;
-4. packages the `.xcarchive` and the dSYMs and writes `release/SHA256SUMS`.
+4. wraps the unsigned `.app` in a sideloading IPA
+   (`BlankGrimoire-<version>.ipa`, a `Payload/` zip);
+5. packages the `.xcarchive` and the dSYMs, then writes `release/SHA256SUMS`
+   covering all three artifacts;
+6. regenerates `repo.json`, the AltStore/SideStore source for that release.
 
 The GitHub release contains:
 
 - `BlankGrimoire.xcarchive.zip`
 - `BlankGrimoire.dSYM.zip`
+- `BlankGrimoire-<version>.ipa`
+- `repo.json` (also committed at the repository root)
 - `SHA256SUMS`
 
-`@semantic-release/git` commits `project.yml` and `CHANGELOG.md` with a
-`chore(release): <version> [skip ci]` message. Do not edit `CHANGELOG.md` or
-create release tags by hand.
+`@semantic-release/git` commits `project.yml`, `CHANGELOG.md` and `repo.json`
+with a `chore(release): <version> [skip ci]` message. Do not edit
+`CHANGELOG.md`, `repo.json` or create release tags by hand.
 
-## Code signing (D4)
+## Sideloading IPA vs signed IPA
 
-The release publishes an **unsigned** archive. It does not build or upload an
-IPA: `xcodebuild -exportArchive` needs a signed archive, so producing an IPA
-requires a certificate, a provisioning profile and an export options plist.
+The release publishes an **unsigned** sideloading IPA: the `.app` is simply
+zipped into a `Payload/` directory, and SideStore, AltStore or Sideloadly sign
+it with the user's own Apple ID. Nothing secret is involved, so it can be
+attached to the release automatically. See `docs/INSTALL.md`.
+
+That is different from a **signed** IPA produced by `xcodebuild -exportArchive`,
+which needs a certificate, a provisioning profile and an export options plist.
+Do not replace the sideloading IPA with a signed export until signing secrets
+and a manual or automatic signing job are approved.
 
 `scripts/make-export-options.sh` generates a manual-signing plist from these
 environment variables:
@@ -48,9 +60,9 @@ environment variables:
 | `IOS_BUNDLE_ID` | no | `com.blankgrimoire.app` |
 | `IOS_EXPORT_METHOD` | no | `app-store-connect` |
 
-Do not add the IPA asset to `.releaserc.json` until signing secrets and a
-manual or automatic signing job are approved. Until then the unsigned archive
-is the release artifact.
+Do not add a **signed** IPA to `.releaserc.json` until signing secrets and a
+manual or automatic signing job are approved. The unsigned sideloading IPA is
+already published and is not affected by this rule.
 
 ## SDK pin
 
