@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.0.0...v1.1.0) (2026-11-15)
+
+### Features
+
+* publish a sideloading IPA, a SideStore source and a README showcase ([#23](https://github.com/BlankGrimoire/BlankGrimoire-iOS/issues/23)) ([58e0c3f](https://github.com/BlankGrimoire/BlankGrimoire-iOS/commit/58e0c3f2374ef95cf68ce042b55a1d6de759f12c))
+
 ## 1.0.0 (2026-11-14)
 
 ### Features
