@@ -23,6 +23,8 @@ xcodebuild archive \
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     GCC_TREAT_WARNINGS_AS_ERRORS=YES
 
+APP="build/BlankGrimoire.xcarchive/Products/Applications/BlankGrimoire.app"
+
 ditto -c -k --sequesterRsrc --keepParent \
     build/BlankGrimoire.xcarchive \
     release/BlankGrimoire.xcarchive.zip
@@ -32,9 +34,29 @@ ditto -c -k --sequesterRsrc --keepParent \
     zip -qry "$ROOT/release/BlankGrimoire.dSYM.zip" .
 )
 
+# Sideloading build: an unsigned IPA that SideStore, AltStore or Sideloadly can
+# sign with a personal Apple ID. iOS cannot install it as-is; see
+# docs/INSTALL.md. The archive above stays the canonical release artifact.
+IPA_NAME="BlankGrimoire-$VERSION.ipa"
+rm -rf build/ipa
+mkdir -p build/ipa/Payload
+cp -R "$APP" build/ipa/Payload/BlankGrimoire.app
+(
+    cd build/ipa
+    zip -qry "$ROOT/release/$IPA_NAME" Payload
+)
+
 (
     cd release
-    shasum -a 256 BlankGrimoire.xcarchive.zip BlankGrimoire.dSYM.zip > SHA256SUMS
+    shasum -a 256 BlankGrimoire.xcarchive.zip BlankGrimoire.dSYM.zip "$IPA_NAME" > SHA256SUMS
 )
+
+# AltStore/SideStore source pointing at this release. Failing to generate it
+# must not break a release, so a missing Node runtime only skips the file.
+if command -v node >/dev/null 2>&1; then
+    node scripts/generate-repo-json.mjs "$VERSION" "release/$IPA_NAME"
+else
+    echo "warning: node not found, repo.json not regenerated" >&2
+fi
 
 echo "Release $VERSION ($BUILD_NUMBER) assets written to release/"

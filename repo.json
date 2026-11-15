@@ -1,0 +1,48 @@
+{
+  "name": "Blank Grimoire",
+  "identifier": "com.blankgrimoire.source",
+  "subtitle": "A themeable reader for the content you bring.",
+  "description": "BlankGrimoire is an empty container: no content, no bundled sources. Add the sites you already visit and read them through theme adapters.",
+  "iconURL": "https://raw.githubusercontent.com/BlankGrimoire/BlankGrimoire-iOS/main/BlankGrimoire/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "website": "https://github.com/BlankGrimoire/BlankGrimoire-iOS",
+  "tintColor": "#6C4AB6",
+  "nsfw": false,
+  "featuredApps": [
+    "com.blankgrimoire.app"
+  ],
+  "apps": [
+    {
+      "name": "Blank Grimoire",
+      "bundleIdentifier": "com.blankgrimoire.app",
+      "developerName": "BlankGrimoire contributors",
+      "subtitle": "Themeable reader",
+      "localizedDescription": "A native, ad-free reader and personal library for the content you bring. Requires a site adapter; no content or sources are bundled.",
+      "iconURL": "https://raw.githubusercontent.com/BlankGrimoire/BlankGrimoire-iOS/main/BlankGrimoire/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "tintColor": "#6C4AB6",
+      "category": "entertainment",
+      "screenshots": [],
+      "versions": [
+        {
+          "version": "1.0.0",
+          "buildVersion": "7",
+          "date": "2026-11-15T11:03:20Z",
+          "localizedDescription": "Blank Grimoire 1.0.0. Release notes: https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/tag/v1.0.0",
+          "downloadURL": "https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/download/v1.0.0/BlankGrimoire-1.0.0.ipa",
+          "size": 3757450,
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {}
+      },
+      "version": "1.0.0",
+      "versionDate": "2026-11-15T11:03:20Z",
+      "versionDescription": "Blank Grimoire 1.0.0. Release notes: https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/tag/v1.0.0",
+      "downloadURL": "https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/download/v1.0.0/BlankGrimoire-1.0.0.ipa",
+      "size": 3757450,
+      "minOSVersion": "17.0"
+    }
+  ],
+  "news": []
+}
