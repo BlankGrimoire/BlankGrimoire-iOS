@@ -192,21 +192,36 @@
 
             func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
                 parent.isLoading = false
-                // Challenge pages carry specific markers. Only close once they
-                // disappear, so a site page that merely renders a captcha
-                // widget is not mistaken for a solved challenge.
+                checkChallengeResolved(in: webView, attempt: 0)
+            }
+
+            private func checkChallengeResolved(in webView: WKWebView, attempt: Int) {
+                // Only the challenge page markers count. `challenge-platform`
+                // is injected into ordinary pages by Cloudflare, so matching it
+                // kept the verification sheet open on an already loaded site.
                 let script = """
                     (() => {
                       const html = (document.documentElement && document.documentElement.outerHTML || '').toLowerCase();
                       return html.includes('cf-chl-')
-                        || html.includes('challenge-platform')
+                        || html.includes('cf_chl_opt')
+                        || html.includes('challenge-error-text')
                         || html.includes('just a moment')
                         || html.includes('enable javascript and cookies');
                     })()
                     """
                 webView.evaluateJavaScript(script) { [weak self] result, _ in
                     guard let self else { return }
-                    guard let number = result as? NSNumber, !number.boolValue else { return }
+                    guard let number = result as? NSNumber else { return }
+                    if number.boolValue {
+                        // The challenge can be solved without a new navigation,
+                        // so poll instead of checking once after `didFinish`.
+                        guard attempt < 40 else { return }
+                        Task { @MainActor [weak self] in
+                            try? await Task.sleep(for: .milliseconds(500))
+                            self?.checkChallengeResolved(in: webView, attempt: attempt + 1)
+                        }
+                        return
+                    }
                     guard let store = self.cookieStore else {
                         self.parent.onVerified()
                         return
