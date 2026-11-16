@@ -102,4 +102,62 @@ final class SiteProfileTests: XCTestCase {
         XCTAssertEqual(profile1, profile2)
         XCTAssertNotEqual(profile1, profile3)
     }
+
+    func testAdapterNetworkHostsExpandAgainstTheSiteDomain() {
+        let profile = SiteProfile(
+            name: "API Site",
+            baseURL: "https://example.org",
+            themeID: "theme.api",
+            networkHosts: ["api.{host}"]
+        )
+
+        let policy = profile.makeNetworkPolicy()
+
+        XCTAssertEqual(policy.allowedHosts, ["example.org", "api.example.org"])
+    }
+
+    func testAdapterNetworkHostsDropTheWwwPrefix() {
+        let profile = SiteProfile(
+            name: "WWW Site",
+            baseURL: "https://www.example.org",
+            themeID: "theme.api",
+            networkHosts: ["api.{host}"]
+        )
+
+        let policy = profile.makeNetworkPolicy()
+
+        XCTAssertEqual(policy.allowedHosts, ["www.example.org", "example.org", "api.example.org"])
+    }
+
+    func testAdapterNetworkHostsCannotLeaveTheSiteDomain() {
+        let profile = SiteProfile(
+            name: "Scoped Site",
+            baseURL: "https://example.org",
+            themeID: "theme.api",
+            networkHosts: [
+                "api.{host}",
+                "{host}.example.net",
+                "attacker.example.net/{host}",
+                "api.{host}.example.net",
+                "{host}",
+            ]
+        )
+
+        let policy = profile.makeNetworkPolicy()
+
+        // Only the in-domain expansion is accepted. `{host}` alone duplicates
+        // the site host and is deduplicated.
+        XCTAssertEqual(policy.allowedHosts, ["example.org", "api.example.org"])
+    }
+
+    func testAdapterNetworkHostsAreOptional() {
+        let profile = SiteProfile(
+            name: "Plain Site",
+            baseURL: "https://example.org",
+            themeID: "theme.plain"
+        )
+
+        XCTAssertNil(profile.networkHosts)
+        XCTAssertEqual(profile.makeNetworkPolicy().allowedHosts, ["example.org"])
+    }
 }

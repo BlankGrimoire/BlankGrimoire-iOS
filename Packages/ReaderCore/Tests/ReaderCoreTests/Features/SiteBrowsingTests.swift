@@ -34,6 +34,34 @@ final class SiteCatalogServiceTests: XCTestCase {
         XCTAssertEqual(outcome.failures.map(\.siteProfileID), ["site-b"])
     }
 
+    func testAdapterNetworkHostsReachTheBridge() throws {
+        let recorder = AllowedHostsRecorder()
+        let profile = makeProfile(id: "site-a", themeID: "theme.api", baseURL: "https://example.org")
+        let bundle = makeBundle(
+            themeID: "theme.api",
+            searchPath: "/search",
+            networkHosts: ["api.{host}"]
+        )
+
+        _ = try AdapterSession.open(
+            profile: profile,
+            bundle: bundle,
+            bridgeFactory: { effective in
+                recorder.record(effective.makeNetworkPolicy().allowedHosts)
+                return PluginBridge(
+                    policy: effective.makeNetworkPolicy(),
+                    logger: SilentLogger(),
+                    customRequestHandler: { request in
+                        HttpResponse(status: 200, url: request.url, headers: [:], body: "<html></html>")
+                    }
+                )
+            },
+            runtimeFactory: { _, _ in TestSiteRuntime() }
+        )
+
+        XCTAssertTrue(recorder.hosts.contains("api.example.org"))
+    }
+
     func testSearchSkipsDisabledSitesAndBlankQueries() async {
         let enabled = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
         var disabled = makeProfile(id: "site-b", themeID: "theme.a", baseURL: "https://example.com")
@@ -482,7 +510,8 @@ func makeBundle(
     themeID: String,
     searchPath: String,
     version: String = "1.0.0",
-    nextPageSelector: String? = nil
+    nextPageSelector: String? = nil,
+    networkHosts: [String] = []
 ) -> AdapterBundle {
     let selectors = ThemeSelectors(
         search: .init(
@@ -502,7 +531,8 @@ func makeBundle(
         name: themeID,
         version: version,
         detectionSignature: signature,
-        selectors: selectors
+        selectors: selectors,
+        networkHosts: networkHosts
     )
     let manifest = AdapterManifest(
         id: themeID,
@@ -510,7 +540,8 @@ func makeBundle(
         version: version,
         apiVersion: ContractVersion.current,
         detectionSignature: signature,
-        sha256: "00"
+        sha256: "00",
+        networkHosts: networkHosts
     )
     return AdapterBundle(
         manifest: manifest,
@@ -764,6 +795,19 @@ private struct DuplicateSearchRuntime: SiteAdapterRuntime {
         in page: PluginPageContext
     ) async throws -> ExtractedGenres { .init(filters: []) }
     func dispose() async {}
+}
+
+private final class AllowedHostsRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _hosts: [String] = []
+
+    var hosts: [String] {
+        lock.withLock { _hosts }
+    }
+
+    func record(_ hosts: [String]) {
+        lock.withLock { _hosts = hosts }
+    }
 }
 
 private final class RequestRecorder: @unchecked Sendable {
