@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.1](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.0...v1.2.1) (2026-11-16)
+
+### Bug Fixes
+
+* keep challenge cookies and web view state for theme detection ([9c73324](https://github.com/BlankGrimoire/BlankGrimoire-iOS/commit/9c73324b2e42351c38fba84e61c2a00f7003e924))
+
 ## [1.2.0](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.1.0...v1.2.0) (2026-11-16)
 
 ### Features

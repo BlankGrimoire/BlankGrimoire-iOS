@@ -23,6 +23,15 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.2.1",
+          "buildVersion": "14",
+          "date": "2026-11-16T17:53:20Z",
+          "localizedDescription": "Blank Grimoire 1.2.1. Release notes: https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/tag/v1.2.1",
+          "downloadURL": "https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/download/v1.2.1/BlankGrimoire-1.2.1.ipa",
+          "size": 3920231,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.2.0",
           "buildVersion": "12",
           "date": "2026-11-16T16:44:37Z",
@@ -54,11 +63,11 @@
         "entitlements": [],
         "privacy": {}
       },
-      "version": "1.2.0",
-      "versionDate": "2026-11-16T16:44:37Z",
-      "versionDescription": "Blank Grimoire 1.2.0. Release notes: https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/tag/v1.2.0",
-      "downloadURL": "https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/download/v1.2.0/BlankGrimoire-1.2.0.ipa",
-      "size": 3917762,
+      "version": "1.2.1",
+      "versionDate": "2026-11-16T17:53:20Z",
+      "versionDescription": "Blank Grimoire 1.2.1. Release notes: https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/tag/v1.2.1",
+      "downloadURL": "https://github.com/BlankGrimoire/BlankGrimoire-iOS/releases/download/v1.2.1/BlankGrimoire-1.2.1.ipa",
+      "size": 3920231,
       "minOSVersion": "17.0"
     }
   ],
