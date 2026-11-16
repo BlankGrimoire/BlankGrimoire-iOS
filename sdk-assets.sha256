@@ -1,5 +1,5 @@
-# sdk-version: 1.4.0
-10baad4b690adfb66f600ecf300443222d53cc37a61ee23278070a0eeafdd793  Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources/runtime.js
+# sdk-version: 1.4.1
+aa8b7e375e6c3f2823294c71841f3c5b0651e108c26b0a052cbfb3ee21a910c1  Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources/runtime.js
 4ee0530b475412bad690188a9293a1024ce9275f260c7e85d39e23efe9483f5e  Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures/v1/attribution.json
 e907429cfaa9ec7311efc9b78b16ebc06b4895ee3be0b8911c93dc0069fdeb7b  Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures/v1/chapter.json
 5bed27f84d498a0fb4d69ec0545ca3e98e422660fcd4db5abbcd3df831327090  Packages/ReaderCore/Tests/ReaderCoreTests/Resources/Contract/fixtures/v1/extraction-strategy-script-json.json

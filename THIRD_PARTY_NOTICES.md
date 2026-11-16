@@ -5,7 +5,7 @@ BlankGrimoire for iOS includes the following third-party components.
 | Component | Version | License | Source |
 |---|---|---|---|
 | SwiftSoup | 2.14.3 | MIT | https://github.com/scinfu/SwiftSoup |
-| BlankGrimoire SDK runtime (`runtime.js`) | 1.4.0 | MIT | https://github.com/BlankGrimoire/BlankGrimoire-sdk |
+| BlankGrimoire SDK runtime (`runtime.js`) | 1.4.1 | MIT | https://github.com/BlankGrimoire/BlankGrimoire-sdk |
 
 The SDK runtime is vendored at
 `Packages/ReaderCore/Sources/ReaderCore/PluginEngine/Runtime/Resources/runtime.js`
