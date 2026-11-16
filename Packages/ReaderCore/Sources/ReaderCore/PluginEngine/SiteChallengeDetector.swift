@@ -11,10 +11,14 @@ enum SiteChallengeDetector {
         }
 
         let normalized = body.lowercased()
+        // `challenge-platform` is deliberately absent: Cloudflare injects
+        // `/cdn-cgi/challenge-platform/...` into pages that are not challenges,
+        // so matching it made every protected page look blocked.
         let markers = [
             "<title>just a moment",
             "cf-chl-",
-            "challenge-platform",
+            "cf_chl_opt",
+            "challenge-error-text",
             "verify you are human",
             "enable javascript and cookies",
             "sorry, you have been blocked",

@@ -601,7 +601,9 @@ var BlankGrimoireRuntime = (() => {
         seen.add(value);
         values.push(value);
       }
-      return values.length > 0 ? values : void 0;
+      if (values.length > 0) {
+        return values;
+      }
     }
     return splitList(readText(root, singleSelector));
   }

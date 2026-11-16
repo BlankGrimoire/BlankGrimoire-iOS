@@ -26,4 +26,24 @@ final class SiteChallengeDetectorTests: XCTestCase {
             )
         )
     }
+
+    func testDoesNotRejectAPageWithTheInjectedChallengePlatformScript() {
+        // Cloudflare injects this script into ordinary pages. Treating it as a
+        // challenge marker made every protected page fail detection.
+        let body = """
+            <html><head><title>Example Library</title>
+            <script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>
+            </head><body><main id="home-main"></main></body></html>
+            """
+        XCTAssertFalse(SiteChallengeDetector.isChallenge(status: 200, body: body))
+    }
+
+    func testDetectsTheChallengeConfigObject() {
+        XCTAssertTrue(
+            SiteChallengeDetector.isChallenge(
+                status: 200,
+                body: "<html><script>window._cf_chl_opt={cvId: '3'}</script></html>"
+            )
+        )
+    }
 }
