@@ -46,6 +46,12 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
     /// to the manual ChallengeView.
     public var usesWebViewMode: Bool
 
+    /// Host templates declared by the active adapter, relative to this site's
+    /// host (for example `api.{host}`). The session fills them from the adapter
+    /// manifest; they are not user input. Optional so existing stored profiles
+    /// decode without migration.
+    public var networkHosts: [String]?
+
     public init(
         id: String = UUID().uuidString,
         name: String,
@@ -59,7 +65,8 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         cookieHandling: CookieHandling = .automatic,
         maxRedirects: Int = 5,
         timeout: TimeInterval = 30,
-        usesWebViewMode: Bool = false
+        usesWebViewMode: Bool = false,
+        networkHosts: [String]? = nil
     ) {
         self.id = id
         self.name = name
@@ -74,6 +81,7 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         self.maxRedirects = max(0, maxRedirects)
         self.timeout = max(1, timeout)
         self.usesWebViewMode = usesWebViewMode
+        self.networkHosts = networkHosts
     }
 
     /// Creates a SiteContext for use with the plugin engine.
@@ -94,15 +102,65 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
     }
 
     /// Creates a network policy for this site.
+    ///
+    /// `allowedHosts` always contains the site host. Adapter-declared
+    /// `networkHosts` templates are expanded against that host and accepted
+    /// only when they stay on the site's domain, so an adapter can reach its
+    /// own API but never widen the allowlist elsewhere.
     public func makeNetworkPolicy() -> SiteNetworkPolicy {
         SiteNetworkPolicy(
             baseURL: baseURL,
-            allowedHosts: [URL(string: baseURL)?.host].compactMap { $0?.lowercased() },
+            allowedHosts: Self.allowedHosts(baseURL: baseURL, networkHosts: networkHosts ?? []),
             maxRedirects: maxRedirects,
             cookieHandling: cookieHandling,
             timeout: timeout,
             defaultHeaders: customHeaders
         )
+    }
+
+    /// Returns a copy carrying the host templates declared by `adapterHosts`.
+    public func withAdapterNetworkHosts(_ adapterHosts: [String]) -> SiteProfile {
+        var copy = self
+        copy.networkHosts = adapterHosts.isEmpty ? nil : adapterHosts
+        return copy
+    }
+
+    /// Expands adapter host templates for `baseURL`.
+    ///
+    /// A template contains exactly one `{host}` placeholder and no scheme,
+    /// port or path. The placeholder is replaced with the site host without a
+    /// leading `www.`, and the result is kept only when it equals that host or
+    /// is a subdomain of it.
+    static func allowedHosts(baseURL: String, networkHosts: [String]) -> [String] {
+        guard let rawHost = URL(string: baseURL)?.host?.lowercased(), !rawHost.isEmpty else {
+            return []
+        }
+        var hosts = [rawHost]
+        let domain = rawHost.hasPrefix("www.") ? String(rawHost.dropFirst(4)) : rawHost
+        if domain != rawHost, !hosts.contains(domain) {
+            hosts.append(domain)
+        }
+        for template in networkHosts {
+            guard let expanded = expandHostTemplate(template, domain: domain),
+                !hosts.contains(expanded)
+            else {
+                continue
+            }
+            hosts.append(expanded)
+        }
+        return hosts
+    }
+
+    static func expandHostTemplate(_ template: String, domain: String) -> String? {
+        let parts = template.lowercased().components(separatedBy: "{host}")
+        guard parts.count == 2 else { return nil }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.-")
+        for part in parts {
+            guard part.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        }
+        let expanded = parts[0] + domain + parts[1]
+        guard expanded == domain || expanded.hasSuffix(".\(domain)") else { return nil }
+        return expanded
     }
 
     /// Returns a copy with updated last accessed time.

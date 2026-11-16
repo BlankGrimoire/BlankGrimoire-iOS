@@ -1,0 +1,6 @@
+{
+  "kind": "scriptJSON",
+  "pattern": "__PAGES__",
+  "path": "chapter.images",
+  "skipWhen": "chapter.protected"
+}
