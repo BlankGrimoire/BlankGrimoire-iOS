@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.0](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.1.0...v1.2.0) (2026-11-16)
+
+### Features
+
+* let adapter hooks reach declared api hosts ([f002c87](https://github.com/BlankGrimoire/BlankGrimoire-iOS/commit/f002c8718eece97a1d765e8e65c3f287c0ccc169))
+
 ## [1.1.0](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.0.0...v1.1.0) (2026-11-15)
 
 ### Features
