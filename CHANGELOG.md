@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.1...v1.2.2) (2026-11-16)
+
+### Bug Fixes
+
+* stop treating injected Cloudflare scripts as a challenge ([#31](https://github.com/BlankGrimoire/BlankGrimoire-iOS/issues/31)) ([2f32bd1](https://github.com/BlankGrimoire/BlankGrimoire-iOS/commit/2f32bd1d0ff1b422546489fbb46354cb9926a9db))
+
 ## [1.2.1](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.0...v1.2.1) (2026-11-16)
 
 ### Bug Fixes
