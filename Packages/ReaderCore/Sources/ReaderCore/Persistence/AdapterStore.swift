@@ -16,6 +16,7 @@ private struct AdapterBundleInspection: Decodable {
     let detectionSignature: ThemeSignature
     let selectors: ThemeSelectors
     let referrerHeaders: [String: String]?
+    let networkHosts: [String]?
 }
 
 // MARK: - Adapter Store Errors
@@ -523,7 +524,8 @@ public final class DefaultAdapterStore: AdapterStore {
             version: verified.manifest.version,
             detectionSignature: verified.manifest.detectionSignature,
             selectors: verified.selectors,
-            referrerHeaders: referrerHeaders
+            referrerHeaders: referrerHeaders,
+            networkHosts: verified.manifest.networkHosts
         )
         let bundle = AdapterBundle(
             manifest: verified.manifest,
@@ -768,7 +770,8 @@ public final class DefaultAdapterStore: AdapterStore {
             apiVersion: inspection.apiVersion,
             detectionSignature: inspection.detectionSignature,
             sha256: sha256,
-            referrerHeaders: inspection.referrerHeaders ?? [:]
+            referrerHeaders: inspection.referrerHeaders ?? [:],
+            networkHosts: inspection.networkHosts ?? []
         )
         return (manifest, inspection.selectors)
     }
@@ -821,6 +824,9 @@ public final class InstalledAdapterEntity {
     /// Theme-declared CDN referrer map, stored as JSON so a restart keeps it.
     /// Optional so existing stores migrate without losing installed adapters.
     public var referrerHeadersJSON: String?
+    /// Theme-declared API host templates, stored as JSON. Optional for the same
+    /// migration reason.
+    public var networkHostsJSON: String?
 
     public init(bundle: AdapterBundle) {
         self.id = bundle.id
@@ -834,10 +840,12 @@ public final class InstalledAdapterEntity {
         self.sourceRepositoryURL = bundle.sourceRepositoryURL
         self.installedAt = bundle.installedAt
         self.referrerHeadersJSON = Self.encodeReferrerHeaders(bundle.themeAdapter.referrerHeaders)
+        self.networkHostsJSON = Self.encodeNetworkHosts(bundle.themeAdapter.networkHosts)
     }
 
     public func toAdapterBundle() -> AdapterBundle {
         let referrerHeaders = Self.decodeReferrerHeaders(referrerHeadersJSON)
+        let networkHosts = Self.decodeNetworkHosts(networkHostsJSON)
         let manifest = AdapterManifest(
             id: id,
             name: name,
@@ -845,7 +853,8 @@ public final class InstalledAdapterEntity {
             apiVersion: apiVersion,
             detectionSignature: detectionSignature,
             sha256: sha256,
-            referrerHeaders: referrerHeaders
+            referrerHeaders: referrerHeaders,
+            networkHosts: networkHosts
         )
         let themeAdapter = ThemeAdapter(
             id: id,
@@ -853,7 +862,8 @@ public final class InstalledAdapterEntity {
             version: version,
             detectionSignature: detectionSignature,
             selectors: themeSelectors,
-            referrerHeaders: referrerHeaders
+            referrerHeaders: referrerHeaders,
+            networkHosts: networkHosts
         )
         return AdapterBundle(
             manifest: manifest,
@@ -880,6 +890,22 @@ public final class InstalledAdapterEntity {
             return [:]
         }
         return headers
+    }
+
+    private static func encodeNetworkHosts(_ hosts: [String]) -> String? {
+        guard !hosts.isEmpty, let data = try? JSONEncoder().encode(hosts) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decodeNetworkHosts(_ json: String?) -> [String] {
+        guard let json, let data = json.data(using: .utf8),
+            let hosts = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return hosts
     }
 }
 

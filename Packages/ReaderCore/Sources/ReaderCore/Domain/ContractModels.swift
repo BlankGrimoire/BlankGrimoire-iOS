@@ -736,13 +736,18 @@ public struct ThemeAdapter: Codable, Sendable, Equatable, Identifiable {
     public let selectors: ThemeSelectors
     public let referrerHeaders: [String: String]
 
+    /// Host templates the adapter's hooks contact, relative to the site host
+    /// (for example `api.{host}`). Expanded by `SiteProfile.makeNetworkPolicy()`.
+    public let networkHosts: [String]
+
     public init(
         id: String,
         name: String,
         version: String,
         detectionSignature: ThemeSignature,
         selectors: ThemeSelectors,
-        referrerHeaders: [String: String] = [:]
+        referrerHeaders: [String: String] = [:],
+        networkHosts: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -750,10 +755,11 @@ public struct ThemeAdapter: Codable, Sendable, Equatable, Identifiable {
         self.detectionSignature = detectionSignature
         self.selectors = selectors
         self.referrerHeaders = referrerHeaders
+        self.networkHosts = networkHosts
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, detectionSignature, selectors, referrerHeaders
+        case id, name, version, detectionSignature, selectors, referrerHeaders, networkHosts
     }
 
     public init(from decoder: Decoder) throws {
@@ -773,6 +779,12 @@ public struct ThemeAdapter: Codable, Sendable, Equatable, Identifiable {
                 [String: String].self,
                 forKey: .referrerHeaders
             ) ?? [:]
+        // Older bundles predate adapter-declared API hosts.
+        networkHosts =
+            try container.decodeIfPresent(
+                [String].self,
+                forKey: .networkHosts
+            ) ?? []
     }
 }
 
@@ -989,10 +1001,13 @@ public struct AdapterManifest: Codable, Sendable {
     public let detectionSignature: ThemeSignature
     public let sha256: String
     public let referrerHeaders: [String: String]
+    /// Host templates for adapter hooks, relative to the site host.
+    public let networkHosts: [String]
 
     public init(
         id: String, name: String, version: String, apiVersion: Int, detectionSignature: ThemeSignature, sha256: String,
-        referrerHeaders: [String: String] = [:]
+        referrerHeaders: [String: String] = [:],
+        networkHosts: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -1001,10 +1016,11 @@ public struct AdapterManifest: Codable, Sendable {
         self.detectionSignature = detectionSignature
         self.sha256 = sha256
         self.referrerHeaders = referrerHeaders
+        self.networkHosts = networkHosts
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, apiVersion, detectionSignature, sha256, referrerHeaders
+        case id, name, version, apiVersion, detectionSignature, sha256, referrerHeaders, networkHosts
     }
 
     public init(from decoder: Decoder) throws {
@@ -1017,6 +1033,7 @@ public struct AdapterManifest: Codable, Sendable {
         detectionSignature = try container.decode(ThemeSignature.self, forKey: .detectionSignature)
         sha256 = try container.decode(String.self, forKey: .sha256)
         referrerHeaders = try container.decodeIfPresent([String: String].self, forKey: .referrerHeaders) ?? [:]
+        networkHosts = try container.decodeIfPresent([String].self, forKey: .networkHosts) ?? []
 
         guard apiVersion == ContractVersion.current else {
             throw DecodingError.dataCorruptedError(

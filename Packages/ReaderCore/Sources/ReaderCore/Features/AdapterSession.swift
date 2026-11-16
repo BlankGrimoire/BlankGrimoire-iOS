@@ -163,7 +163,13 @@ struct AdapterSession {
             throw AdapterSessionError.unsupportedAPIVersion(found: bundle.manifest.apiVersion)
         }
 
-        let bridge = bridgeFactory(profile)
+        let bridge = bridgeFactory(
+            profile.withAdapterNetworkHosts(
+                bundle.manifest.networkHosts.isEmpty
+                    ? bundle.themeAdapter.networkHosts
+                    : bundle.manifest.networkHosts
+            )
+        )
         do {
             let runtime = try runtimeFactory(bundle, bridge)
             return AdapterSession(profile: profile, bundle: bundle, bridge: bridge, runtime: runtime)
