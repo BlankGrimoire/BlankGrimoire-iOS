@@ -333,6 +333,23 @@ var BlankGrimoireRuntime = (() => {
     }
     return current;
   }
+  function isPaidPayload(parsed, skipWhen) {
+    if (!skipWhen) {
+      return false;
+    }
+    const value = readPath(parsed, skipWhen);
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value !== 0;
+    }
+    if (typeof value === "string") {
+      const text = value.trim().toLowerCase();
+      return text !== "" && text !== "false" && text !== "0";
+    }
+    return false;
+  }
   function pageURLFromItem(item) {
     if (typeof item === "string") {
       return item.trim() === "" ? null : item;
@@ -367,7 +384,7 @@ var BlankGrimoireRuntime = (() => {
     }
     return pages;
   }
-  async function extractScriptJSON(strategy, document, baseURL, parseHTML) {
+  async function extractScriptJSON(strategy, document, baseURL, parseHTML, onBlocked) {
     const regex = new RegExp(strategy.pattern);
     for (const script of queryAll(document, "script")) {
       const text = textOf(script);
@@ -393,6 +410,10 @@ var BlankGrimoireRuntime = (() => {
         const parsed = parseJSONText(decoded);
         if (parsed === void 0) {
           continue;
+        }
+        if (isPaidPayload(parsed, strategy.skipWhen)) {
+          onBlocked?.();
+          return [];
         }
         const payload = readPath(parsed, strategy.path);
         if (payload === void 0 || payload === null) {
@@ -427,9 +448,13 @@ var BlankGrimoireRuntime = (() => {
     }
     return void 0;
   }
-  function extractHydration(strategy, document, baseURL, windowObj) {
+  function extractHydration(strategy, document, baseURL, windowObj, onBlocked) {
     const payload = hydrationPayload(strategy, document, windowObj);
     if (payload === void 0) {
+      return [];
+    }
+    if (isPaidPayload(payload, strategy.skipWhen)) {
+      onBlocked?.();
       return [];
     }
     let value = payload;
@@ -483,14 +508,16 @@ var BlankGrimoireRuntime = (() => {
           strategy,
           document,
           environment.baseURL,
-          environment.parseHTML
+          environment.parseHTML,
+          environment.onBlocked
         );
       case "hydration":
         return extractHydration(
           strategy,
           document,
           environment.baseURL,
-          environment.window
+          environment.window,
+          environment.onBlocked
         );
       case "ajax":
         return extractAjax(strategy, document, environment, depth);
@@ -561,6 +588,22 @@ var BlankGrimoireRuntime = (() => {
     }
     const items = value.split(/[,|\n]/).map((item) => item.trim()).filter((item) => item !== "");
     return items.length > 0 ? items : void 0;
+  }
+  function readList(root, listSelector, singleSelector) {
+    if (listSelector) {
+      const values = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const element of queryAll(root, listSelector)) {
+        const value = textOf(element);
+        if (value === "" || seen.has(value)) {
+          continue;
+        }
+        seen.add(value);
+        values.push(value);
+      }
+      return values.length > 0 ? values : void 0;
+    }
+    return splitList(readText(root, singleSelector));
   }
   function normalizeStatus(value) {
     const text = value.trim().toLowerCase();
@@ -666,19 +709,23 @@ var BlankGrimoireRuntime = (() => {
         details[field] = value;
       }
     }
-    const altTitles = splitList(readText(document, detailsSelectors.altTitles));
+    const altTitles = readList(
+      document,
+      detailsSelectors.altTitlesItem,
+      detailsSelectors.altTitles
+    );
     if (altTitles) {
       details.altTitles = altTitles;
     }
-    const authors = splitList(readText(document, detailsSelectors.authors));
+    const authors = readList(document, detailsSelectors.authorsItem, detailsSelectors.authors);
     if (authors) {
       details.authors = authors;
     }
-    const artists = splitList(readText(document, detailsSelectors.artists));
+    const artists = readList(document, detailsSelectors.artistsItem, detailsSelectors.artists);
     if (artists) {
       details.artists = artists;
     }
-    const tags = splitList(readText(document, detailsSelectors.tags));
+    const tags = readList(document, detailsSelectors.tagsItem, detailsSelectors.tags);
     if (tags) {
       details.tags = tags;
     }
@@ -708,8 +755,14 @@ var BlankGrimoireRuntime = (() => {
     }
     const selectors = selectorsFor(runtime).chapters;
     const baseURL = runtime.context.baseURL;
+    const excludedSelector = selectors.excludeItem ?? selectors.premiumMarker;
     const chapters = [];
+    let dropped = 0;
     for (const element of queryAll(runtime.document, selectors.item)) {
+      if (excludedSelector && element.querySelector(excludedSelector)) {
+        dropped += 1;
+        continue;
+      }
       const link = selectLink(element, selectors.link);
       const href = link ? attr(link, "href") : null;
       if (!href) {
@@ -733,6 +786,11 @@ var BlankGrimoireRuntime = (() => {
       }
       chapters.push(chapter);
     }
+    if (dropped > 0) {
+      console.log(
+        `chapters: dropped ${dropped} paid ${dropped === 1 ? "row" : "rows"}`
+      );
+    }
     const numeric = chapters.every((chapter) => chapter.number !== void 0);
     if (numeric) {
       chapters.sort((a, b) => {
@@ -752,7 +810,13 @@ var BlankGrimoireRuntime = (() => {
       return hook(runtime.context, keys.mangaKey, keys.chapterKey);
     }
     const selectors = selectorsFor(runtime);
-    const environment = { baseURL: runtime.context.baseURL };
+    let blocked = false;
+    const environment = {
+      baseURL: runtime.context.baseURL,
+      onBlocked: () => {
+        blocked = true;
+      }
+    };
     if (runtime.window) {
       environment.window = runtime.window;
     }
@@ -761,6 +825,10 @@ var BlankGrimoireRuntime = (() => {
     }
     for (const strategy of selectors.pages.strategies) {
       const pages = await runStrategy(strategy, runtime.document, environment);
+      if (blocked) {
+        console.log("pages: skipped, the payload is flagged as paid");
+        return [];
+      }
       if (pages.length > 0) {
         return pages;
       }

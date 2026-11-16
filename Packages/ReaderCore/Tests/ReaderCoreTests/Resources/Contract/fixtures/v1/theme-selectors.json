@@ -23,7 +23,8 @@
     "link": "a",
     "title": ".chapter-title",
     "date": ".chapter-date",
-    "order": "desc"
+    "order": "desc",
+    "excludeItem": ".coin-badge"
   },
   "pages": {
     "strategies": [

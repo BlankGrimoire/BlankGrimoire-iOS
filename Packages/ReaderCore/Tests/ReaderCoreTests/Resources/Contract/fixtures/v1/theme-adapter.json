@@ -7,6 +7,7 @@
     "selectors": [".example-reader"],
     "minScore": 2
   },
+  "networkHosts": ["api.{host}"],
   "selectors": {
     "search": {
       "path": "/search",
