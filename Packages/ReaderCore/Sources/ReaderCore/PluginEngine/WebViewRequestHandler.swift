@@ -83,6 +83,7 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
     private var webView: WKWebView?
     private var timeoutTask: Task<Void, Never>?
     private var hasCompleted = false
+    private var challengePolls = 0
 
     init(
         url: URL,
@@ -105,11 +106,13 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()  // Isolated per request
 
-        // Apply cookies from ChallengeCookieStore
+        // Apply cookies from ChallengeCookieStore. `setCookie` is asynchronous,
+        // and loading before the challenge cookies land would send the request
+        // without them: on a retry after a visible verification that means the
+        // hidden web view hits the challenge again and detection never sees the
+        // page.
         let cookieStore = config.websiteDataStore.httpCookieStore
-        for cookie in ChallengeCookieStore.shared.cookies(forHost: url.host ?? "") {
-            cookieStore.setCookie(cookie)
-        }
+        let cookies = ChallengeCookieStore.shared.cookies(forHost: url.host ?? "")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView?.customUserAgent = UserAgent.default
@@ -134,7 +137,20 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
             urlRequest.setValue(value, forHTTPHeaderField: field)
         }
 
-        webView?.load(urlRequest)
+        if cookies.isEmpty {
+            webView?.load(urlRequest)
+        } else {
+            let group = DispatchGroup()
+            for cookie in cookies {
+                group.enter()
+                cookieStore.setCookie(cookie) { group.leave() }
+            }
+            group.notify(queue: .main) { [weak self] in
+                Task { @MainActor in
+                    self?.webView?.load(urlRequest)
+                }
+            }
+        }
 
         // Start timeout
         timeoutTask = Task { @MainActor in
@@ -227,8 +243,16 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
             let html = try await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String ?? ""
             let currentURL = webView.url?.absoluteString ?? url.absoluteString
 
-            // Check if we still have a challenge
+            // Check if we still have a challenge. Cloudflare often swaps the
+            // challenge page for the real one a moment after `didFinish`, so
+            // poll briefly before giving up and asking the user.
             if SiteChallengeDetector.isChallenge(status: 200, body: html) {
+                if challengePolls < 10 {
+                    challengePolls += 1
+                    try? await Task.sleep(for: .milliseconds(500))
+                    await extractHTML()
+                    return
+                }
                 logger.warn(
                     "WebView mode: challenge still present after JS execution", level: 1, context: ["url": currentURL])
                 // Don't complete - let the manual ChallengeView handle it

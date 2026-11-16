@@ -110,7 +110,8 @@ public final class SitesViewModel {
                 name: displayName.isEmpty ? (SiteURL.host(from: baseURL) ?? baseURL) : displayName,
                 baseURL: baseURL,
                 themeID: theme.id,
-                themeVersion: theme.version
+                themeVersion: theme.version,
+                usesWebViewMode: theme.detectionSignature.usesWebViewMode
             )
             // Check and insert happen inside the store without suspending, so
             // two taps cannot both pass the duplicate check.
