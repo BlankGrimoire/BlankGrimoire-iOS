@@ -511,7 +511,8 @@ func makeBundle(
     searchPath: String,
     version: String = "1.0.0",
     nextPageSelector: String? = nil,
-    networkHosts: [String] = []
+    networkHosts: [String] = [],
+    usesWebViewMode: Bool = false
 ) -> AdapterBundle {
     let selectors = ThemeSelectors(
         search: .init(
@@ -525,7 +526,7 @@ func makeBundle(
         chapters: .init(item: ".chapter", link: "a", order: "desc"),
         pages: .init(strategies: [])
     )
-    let signature = ThemeSignature(minScore: 1)
+    let signature = ThemeSignature(minScore: 1, usesWebViewMode: usesWebViewMode)
     let theme = ThemeAdapter(
         id: themeID,
         name: themeID,

@@ -173,7 +173,7 @@ final class AdapterSessionPool {
     private func use(key: Key, profile: SiteProfile) -> Lease? {
         guard var entry = entries[key] else { return nil }
 
-        guard entry.session.profile == profile else {
+        guard Self.sameConfiguration(entry.session.profile, profile) else {
             // The user edited the profile (URL, headers, overrides): the
             // network policy and selector overrides inside the session are
             // stale, so close it and let the caller reopen.
@@ -186,6 +186,22 @@ final class AdapterSessionPool {
         entry.lastUsed = Date()
         entries[key] = entry
         return Lease(session: entry.session, key: key, pool: self)
+    }
+
+    /// Compares the user-editable profile fields.
+    ///
+    /// `networkHosts` and `usesWebViewMode` are owned by the adapter manifest
+    /// and are applied to the session profile when it opens, so the stored and
+    /// session copies can legitimately differ. Comparing the raw values would
+    /// make every second lookup look like an edit and drop the warm session.
+    private static func sameConfiguration(_ lhs: SiteProfile, _ rhs: SiteProfile) -> Bool {
+        var left = lhs
+        var right = rhs
+        left.networkHosts = nil
+        right.networkHosts = nil
+        left.usesWebViewMode = false
+        right.usesWebViewMode = false
+        return left == right
     }
 
     fileprivate func release(_ key: Key) {
