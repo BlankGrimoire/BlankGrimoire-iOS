@@ -127,13 +127,19 @@
         var body: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 ZStack(alignment: .bottomTrailing) {
-                    MangaCoverImage(
-                        url: manga.coverURL,
-                        loader: imageLoader,
-                        siteBaseURL: manga.siteURL
-                    )
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+                    // A fixed 2:3 box keeps every card the same size: covers
+                    // with another ratio are centre-cropped instead of making
+                    // the card wider or taller than its neighbours.
+                    Color.clear
+                        .aspectRatio(2 / 3, contentMode: .fit)
+                        .overlay {
+                            MangaCoverImage(
+                                url: manga.coverURL,
+                                loader: imageLoader,
+                                siteBaseURL: manga.siteURL
+                            )
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
 
                     if manga.isFavorite {
                         Image(systemName: "heart.fill")

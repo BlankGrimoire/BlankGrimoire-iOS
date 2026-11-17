@@ -151,6 +151,9 @@
         @State private var viewModel: MangaDetailViewModel
         @State private var readerRoute: ReaderRoute?
         @State private var challengeRoute: ChallengeRoute?
+        /// Long-form content starts folded so the chapter list stays close.
+        @State private var areAltTitlesExpanded = false
+        @State private var isSynopsisExpanded = false
         @Environment(\.dismiss) private var dismiss
 
         public init(manga: MangaEntity, dependencies: FeaturesDependencies) {
@@ -168,20 +171,22 @@
 
         private var coverSection: some View {
             HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(
-                    url: manga.coverURL,
-                    loader: dependencies.imageLoader,
-                    siteBaseURL: manga.siteURL
-                )
-                .frame(width: 120)
-                .aspectRatio(2 / 3, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
-                .shadow(
-                    color: .black.opacity(DesignTokens.Shadow.md.opacity),
-                    radius: DesignTokens.Shadow.md.radius,
-                    x: DesignTokens.Shadow.md.x,
-                    y: DesignTokens.Shadow.md.y
-                )
+                Color.clear
+                    .frame(width: 120, height: 180)
+                    .overlay {
+                        MangaCoverImage(
+                            url: manga.coverURL,
+                            loader: dependencies.imageLoader,
+                            siteBaseURL: manga.siteURL
+                        )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
+                    .shadow(
+                        color: .black.opacity(DesignTokens.Shadow.md.opacity),
+                        radius: DesignTokens.Shadow.md.radius,
+                        x: DesignTokens.Shadow.md.x,
+                        y: DesignTokens.Shadow.md.y
+                    )
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(manga.title)
@@ -226,14 +231,15 @@
         private var infoSection: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 if !manga.altTitles.isEmpty {
-                    Text("Alternative Titles")
-                        .font(Typography.caption1.weight(.medium))
-                        .foregroundStyle(.secondary)
-
-                    ForEach(manga.altTitles, id: \.self) { altTitle in
-                        Text(altTitle)
-                            .font(Typography.caption1)
-                            .foregroundStyle(AppColor.onSurfaceVariant)
+                    CollapsibleSection(
+                        title: "Alternative Titles",
+                        isExpanded: $areAltTitlesExpanded
+                    ) {
+                        ForEach(manga.altTitles, id: \.self) { altTitle in
+                            Text(altTitle)
+                                .font(Typography.caption1)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
+                        }
                     }
                 }
 
@@ -253,11 +259,11 @@
 
         private var synopsisSection: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                Text("Synopsis")
-                    .font(Typography.headline)
-                Text(manga.synopsis ?? "")
-                    .font(Typography.body)
-                    .foregroundStyle(.secondary)
+                CollapsibleSection(title: "Synopsis", isExpanded: $isSynopsisExpanded) {
+                    Text(manga.synopsis ?? "")
+                        .font(Typography.body)
+                        .foregroundStyle(.secondary)
+                }
             }
             .card()
         }
