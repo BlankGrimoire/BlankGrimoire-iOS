@@ -180,12 +180,26 @@
                 }
 
                 if let lastReadAt = manga.lastReadAt {
-                    Text("Read \(lastReadAt, style: .offset)")
+                    Text(Self.lastReadLabel(lastReadAt))
                         .font(Typography.caption1)
                         .foregroundStyle(AppColor.onSurfaceVariant)
+                        .lineLimit(1)
                 }
             }
             .card()
+        }
+
+        /// Absolute last-read timestamp.
+        ///
+        /// Cards are narrow, so the year only appears when the reading session
+        /// was not in the current year; the time is always shown so two
+        /// sessions on the same day remain distinguishable.
+        static func lastReadLabel(_ date: Date, now: Date = Date()) -> String {
+            let style: Date.FormatStyle =
+                Calendar.current.isDate(date, equalTo: now, toGranularity: .year)
+                ? .dateTime.month(.abbreviated).day().hour().minute()
+                : .dateTime.year().month(.abbreviated).day()
+            return "Read \(date.formatted(style))"
         }
     }
 
