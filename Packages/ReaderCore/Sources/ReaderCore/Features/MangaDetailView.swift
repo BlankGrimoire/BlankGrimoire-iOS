@@ -95,7 +95,7 @@
                             if let number = chapter.number {
                                 Text("Ch. \(number, specifier: "%.1f")")
                                     .font(Typography.caption1)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(AppColor.onSurfaceVariant)
                             }
 
                         }
@@ -116,10 +116,10 @@
                         if let publishedAt = chapter.publishedAt {
                             Text(publishedAt, style: .date)
                                 .font(Typography.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
                         }
                     }
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(AppColor.onSurfaceVariant)
                 }
                 .padding(DesignTokens.Spacing.sm)
                 .background(AppColor.surface)
@@ -131,7 +131,9 @@
 
     private struct ReaderRoute: Identifiable {
         let chapter: ChapterEntity
-        var id: String { chapter.id }
+        let startPosition: ReaderStartPosition
+
+        var id: String { "\(chapter.id)#\(startPosition.rawValue)" }
     }
 
     private struct ChallengeRoute: Identifiable {
@@ -149,6 +151,9 @@
         @State private var viewModel: MangaDetailViewModel
         @State private var readerRoute: ReaderRoute?
         @State private var challengeRoute: ChallengeRoute?
+        /// Long-form content starts folded so the chapter list stays close.
+        @State private var areAltTitlesExpanded = false
+        @State private var isSynopsisExpanded = false
         @Environment(\.dismiss) private var dismiss
 
         public init(manga: MangaEntity, dependencies: FeaturesDependencies) {
@@ -166,20 +171,22 @@
 
         private var coverSection: some View {
             HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(
-                    url: manga.coverURL,
-                    loader: dependencies.imageLoader,
-                    siteBaseURL: manga.siteURL
-                )
-                .frame(width: 120)
-                .aspectRatio(2 / 3, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
-                .shadow(
-                    color: .black.opacity(DesignTokens.Shadow.md.opacity),
-                    radius: DesignTokens.Shadow.md.radius,
-                    x: DesignTokens.Shadow.md.x,
-                    y: DesignTokens.Shadow.md.y
-                )
+                Color.clear
+                    .frame(width: 120, height: 180)
+                    .overlay {
+                        MangaCoverImage(
+                            url: manga.coverURL,
+                            loader: dependencies.imageLoader,
+                            siteBaseURL: manga.siteURL
+                        )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
+                    .shadow(
+                        color: .black.opacity(DesignTokens.Shadow.md.opacity),
+                        radius: DesignTokens.Shadow.md.radius,
+                        x: DesignTokens.Shadow.md.x,
+                        y: DesignTokens.Shadow.md.y
+                    )
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(manga.title)
@@ -199,7 +206,7 @@
                     if let lastRead = manga.lastReadAt {
                         Text("Last read \(lastRead, style: .offset)")
                             .font(Typography.caption1)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(AppColor.onSurfaceVariant)
                     }
 
                     if manga.readingProgress > 0 {
@@ -224,14 +231,15 @@
         private var infoSection: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 if !manga.altTitles.isEmpty {
-                    Text("Alternative Titles")
-                        .font(Typography.caption1.weight(.medium))
-                        .foregroundStyle(.secondary)
-
-                    ForEach(manga.altTitles, id: \.self) { altTitle in
-                        Text(altTitle)
-                            .font(Typography.caption1)
-                            .foregroundStyle(.tertiary)
+                    CollapsibleSection(
+                        title: "Alternative Titles",
+                        isExpanded: $areAltTitlesExpanded
+                    ) {
+                        ForEach(manga.altTitles, id: \.self) { altTitle in
+                            Text(altTitle)
+                                .font(Typography.caption1)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
+                        }
                     }
                 }
 
@@ -251,11 +259,11 @@
 
         private var synopsisSection: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                Text("Synopsis")
-                    .font(Typography.headline)
-                Text(manga.synopsis ?? "")
-                    .font(Typography.body)
-                    .foregroundStyle(.secondary)
+                CollapsibleSection(title: "Synopsis", isExpanded: $isSynopsisExpanded) {
+                    Text(manga.synopsis ?? "")
+                        .font(Typography.body)
+                        .foregroundStyle(.secondary)
+                }
             }
             .card()
         }
@@ -352,9 +360,12 @@
 
                     Spacer()
 
-                    if let resumeChapter = viewModel.resumeChapter {
+                    if let resumeTarget = viewModel.resumeTarget {
                         Button {
-                            readerRoute = ReaderRoute(chapter: resumeChapter)
+                            readerRoute = ReaderRoute(
+                                chapter: resumeTarget.chapter,
+                                startPosition: resumeTarget.startPosition
+                            )
                         } label: {
                             Label("Resume", systemImage: "play.fill")
                                 .font(.subheadline.weight(.semibold))
@@ -385,7 +396,10 @@
                                     $0.readAt < $1.readAt
                                 })?.progress ?? 0
                             ) {
-                                readerRoute = ReaderRoute(chapter: chapter)
+                                readerRoute = ReaderRoute(
+                                    chapter: chapter,
+                                    startPosition: ReaderEntryPoint.manualStart(for: chapter)
+                                )
                             }
                         }
                     }
@@ -461,7 +475,8 @@
                     manga: manga,
                     chapter: route.chapter,
                     chapters: viewModel.chapters,
-                    dependencies: dependencies
+                    dependencies: dependencies,
+                    startPosition: route.startPosition
                 )
             }
             .onChange(of: viewModel.challengeURL) { _, url in

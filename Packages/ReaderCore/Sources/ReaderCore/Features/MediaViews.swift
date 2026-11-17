@@ -22,9 +22,18 @@
         var placeholderIcon: String = "book.closed"
         /// Bumped by the reader to force a fresh request for the same URL.
         var reloadID: Int = 0
+        /// Width/height ratio reserved while the image downloads.
+        ///
+        /// Reader rows must not collapse to the shape's intrinsic height: a
+        /// 10pt placeholder inside a lazy stack changes the content height on
+        /// every appearance and makes the scroll view jump.
+        var reservedAspectRatio: CGFloat? = nil
+        /// Reports the decoded pixel size so the reader can remember it.
+        var onImageSize: ((CGSize) -> Void)? = nil
 
         @State private var image: UIImage?
         @State private var isLoading = false
+        @State private var displayedURL: String?
 
         var body: some View {
             Group {
@@ -42,23 +51,51 @@
         }
 
         private var placeholder: some View {
-            Rectangle()
+            let base = Rectangle()
                 .fill(AppColor.surfaceVariant)
                 .overlay {
                     if isLoading {
                         ProgressView()
                             .controlSize(.small)
+                            .tint(AppColor.primary)
                     } else {
                         Image(systemName: placeholderIcon)
                             .font(.title)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(AppColor.onSurfaceVariant)
                     }
                 }
+
+            return Group {
+                if let reservedAspectRatio, reservedAspectRatio > 0 {
+                    base.aspectRatio(reservedAspectRatio, contentMode: .fit)
+                } else {
+                    base
+                }
+            }
         }
 
         private func load() async {
-            image = nil
-            guard let url, let loader else { return }
+            guard let url, let loader else {
+                image = nil
+                displayedURL = nil
+                return
+            }
+
+            if displayedURL != url {
+                // The view was recycled for another page: never keep the
+                // previous image on screen while the new one downloads.
+                image = nil
+                displayedURL = url
+            }
+
+            // Re-entering the lazy stack: render the already decoded page
+            // right away instead of collapsing the row back to its
+            // placeholder.
+            if let cached = DecodedImageCache.shared.image(for: url) {
+                image = cached
+                reportSize(of: cached)
+                return
+            }
 
             isLoading = true
             defer { isLoading = false }
@@ -73,12 +110,23 @@
                 // Use ImageIO for robust WebP decoding (supports more variants than UIImage(data:))
                 if let uiImage = decodeImage(data: data) {
                     image = uiImage
+                    DecodedImageCache.shared.insert(uiImage, for: url)
+                    reportSize(of: uiImage)
                 } else {
-                    // Decoding failed. Keep placeholder.
+                    // Decoding failed. Keep the previous image or placeholder.
                 }
             } catch {
-                // Image failures are non-fatal: keep the placeholder.
+                // Image failures are non-fatal: keep the previous image or
+                // placeholder. A later reload bumps `reloadID` and retries.
             }
+        }
+
+        private func reportSize(of image: UIImage) {
+            guard let onImageSize else { return }
+            let scale = image.scale
+            onImageSize(
+                CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            )
         }
 
         private func decodeImage(data: Data) -> UIImage? {
@@ -145,22 +193,69 @@
         }
     }
 
-    /// Small site icon with a globe placeholder.
+    /// Small site icon, resolved from the site origin.
+    ///
+    /// Sites rarely agree on where the icon lives, so the usual browser
+    /// locations are tried in order and the first one that decodes wins. Only
+    /// relative paths are used: no icon service or domain is hardcoded.
     struct SiteFaviconImage: View {
         let baseURL: String
         let loader: (any ImageLoading)?
 
-        private var faviconURL: String? {
-            URL(string: baseURL)?.appending(path: "favicon.ico").absoluteString
-        }
+        private static let paths = [
+            "favicon.ico",
+            "favicon.png",
+            "apple-touch-icon.png",
+            "apple-touch-icon-precomposed.png",
+        ]
+
+        @State private var image: UIImage?
 
         var body: some View {
-            CachedAsyncImage(
-                url: faviconURL,
-                loader: loader,
-                contentMode: .fit,
-                placeholderIcon: "globe"
-            )
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: "globe")
+                        .font(.body)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
+                }
+            }
+            .task(id: baseURL) { await load() }
+        }
+
+        private func load() async {
+            image = nil
+            guard let loader, let origin = Self.origin(of: baseURL) else { return }
+
+            for path in Self.paths {
+                let url = origin.appending(path: path).absoluteString
+                guard
+                    let data = try? await loader.loadImageData(
+                        for: url,
+                        headers: nil,
+                        siteBaseURL: nil
+                    )
+                else { continue }
+
+                if let decoded = UIImage(data: data) {
+                    image = decoded
+                    return
+                }
+            }
+        }
+
+        /// Scheme and host of the profile, without its path.
+        private static func origin(of baseURL: String) -> URL? {
+            guard let url = URL(string: baseURL),
+                var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { return nil }
+            components.path = ""
+            components.query = nil
+            components.fragment = nil
+            return components.url
         }
     }
 #endif

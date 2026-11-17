@@ -227,6 +227,19 @@ public final class ChapterEntity {
         isDownloaded && downloadedPagesCount >= pageCount && pageCount > 0
     }
 
+    /// Latest recorded reading fraction for this chapter, from 0 to 1.
+    public var recordedProgress: Double {
+        readingProgressEntries.max(by: { $0.readAt < $1.readAt })?.progress ?? 0
+    }
+
+    /// Whether the last page of the chapter has been reached.
+    ///
+    /// The comparison tolerates the rounding of `progress`, which is stored as
+    /// `(pageIndex + 1) / totalPages`.
+    public var isRead: Bool {
+        recordedProgress >= 1.0 - 0.0001
+    }
+
     /// Returns the adapter key, removing the site-profile prefix when present.
     ///
     /// Adapters only understand their own keys, while the persisted identifier

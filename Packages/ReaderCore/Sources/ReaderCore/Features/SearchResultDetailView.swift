@@ -29,6 +29,9 @@
         @State private var isImported: Bool
         @State private var lastError: Error?
         @State private var challengeRoute: ChallengeRoute?
+        /// Alternative titles start folded; the synopsis stays open because it
+        /// is the main criterion for deciding whether to import the series.
+        @State private var areAltTitlesExpanded = false
 
         init(
             result: SiteSearchResult,
@@ -54,6 +57,10 @@
                     }
 
                     if let details {
+                        if let altTitles = details.altTitles, !altTitles.isEmpty {
+                            altTitlesSection(altTitles)
+                        }
+
                         if let synopsis = details.synopsis, !synopsis.isEmpty {
                             synopsisSection(synopsis)
                         }
@@ -136,20 +143,22 @@
 
         private var header: some View {
             HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-                MangaCoverImage(
-                    url: details?.coverURL ?? result.coverURL,
-                    loader: dependencies.imageLoader,
-                    siteBaseURL: result.siteURL
-                )
-                .frame(width: 120)
-                .aspectRatio(2 / 3, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
-                .shadow(
-                    color: .black.opacity(DesignTokens.Shadow.md.opacity),
-                    radius: DesignTokens.Shadow.md.radius,
-                    x: DesignTokens.Shadow.md.x,
-                    y: DesignTokens.Shadow.md.y
-                )
+                Color.clear
+                    .frame(width: 120, height: 180)
+                    .overlay {
+                        MangaCoverImage(
+                            url: details?.coverURL ?? result.coverURL,
+                            loader: dependencies.imageLoader,
+                            siteBaseURL: result.siteURL
+                        )
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md))
+                    .shadow(
+                        color: .black.opacity(DesignTokens.Shadow.md.opacity),
+                        radius: DesignTokens.Shadow.md.radius,
+                        x: DesignTokens.Shadow.md.x,
+                        y: DesignTokens.Shadow.md.y
+                    )
 
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(details?.title ?? result.title)
@@ -171,13 +180,6 @@
                         .font(Typography.caption1)
                         .foregroundStyle(.secondary)
 
-                        if let altTitles = details.altTitles, !altTitles.isEmpty {
-                            Text(altTitles.joined(separator: " · "))
-                                .font(Typography.caption1)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(2)
-                        }
-
                         if isImported {
                             Label("In Library", systemImage: "checkmark.circle.fill")
                                 .font(Typography.caption1.weight(.medium))
@@ -187,6 +189,19 @@
                 }
                 .padding(.vertical, DesignTokens.Spacing.xs)
             }
+        }
+
+        private func altTitlesSection(_ altTitles: [String]) -> some View {
+            CollapsibleSection(title: "Alternative Titles", isExpanded: $areAltTitlesExpanded) {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    ForEach(altTitles, id: \.self) { altTitle in
+                        Text(altTitle)
+                            .font(Typography.callout)
+                            .foregroundStyle(AppColor.onSurfaceVariant)
+                    }
+                }
+            }
+            .card()
         }
 
         private func synopsisSection(_ synopsis: String) -> some View {
@@ -284,7 +299,7 @@
                                 if let date = date(from: chapter.publishedAt) {
                                     Text(date, style: .date)
                                         .font(Typography.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(AppColor.onSurfaceVariant)
                                 }
                             }
                             .padding(DesignTokens.Spacing.sm)

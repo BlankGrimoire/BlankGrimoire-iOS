@@ -16,19 +16,35 @@
         @State private var isChromeVisible = true
         @State private var showingChapterPicker = false
         @State private var reloadToken = 0
+        /// Becomes true once the vertical reader restored the saved page.
+        ///
+        /// Scroll updates are ignored until then: the first layout reports the
+        /// top row, which would otherwise overwrite the restored index before
+        /// the scroll view has moved to it.
+        @State private var didRestoreScroll = false
+        /// Page the reader opens at. Captured once, so a reload keeps the
+        /// current page instead of returning to the entry point.
+        private let startPosition: ReaderStartPosition
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
+        @Environment(\.colorScheme) private var colorScheme
         @Environment(\.dismiss) private var dismiss
+
+        /// Fallback portrait ratio used until a page reports its real size.
+        private static let defaultPageAspectRatio: CGFloat = 0.7
+        private static let scrollCoordinateSpace = "readerVerticalScroll"
 
         public init(
             manga: MangaEntity,
             chapter: ChapterEntity,
             chapters: [ChapterEntity] = [],
-            dependencies: FeaturesDependencies
+            dependencies: FeaturesDependencies,
+            startPosition: ReaderStartPosition = .restore
         ) {
             self.dependencies = dependencies
             self.manga = manga
             self.chapters = chapters.isEmpty ? manga.chaptersInReadingOrder : chapters
             self._currentChapter = State(initialValue: chapter)
+            self.startPosition = startPosition
 
             if let pageRepository = dependencies.pageRepository,
                 let readingProgressRepository = dependencies.readingProgressRepository
@@ -40,7 +56,8 @@
                         pageRepository: pageRepository,
                         readingProgressRepository: readingProgressRepository,
                         mangaRepository: dependencies.mangaRepository,
-                        chapterPagesProvider: dependencies.chapterPagesProvider
+                        chapterPagesProvider: dependencies.chapterPagesProvider,
+                        startPosition: startPosition
                     )
                 )
             } else {
@@ -64,7 +81,7 @@
         private func readerContent(_ viewModel: ReaderViewModel) -> some View {
             readerBody(viewModel)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
+                .background(AppColor.readerCanvas)
                 .contentShape(Rectangle())
                 .simultaneousGesture(
                     TapGesture().onEnded { toggleChrome() }
@@ -72,18 +89,21 @@
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if isChromeVisible {
                         topBar(viewModel)
-                            .background(.ultraThinMaterial, ignoresSafeAreaEdges: .top)
+                            .background { chromeGlass(ignoring: .top) }
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if isChromeVisible {
-                        bottomBar(viewModel)
-                            .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        VStack(spacing: 0) {
+                            chapterProgressBar(viewModel)
+                            bottomBar(viewModel)
+                        }
+                        .background { chromeGlass(ignoring: .bottom) }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .background(Color.black.ignoresSafeArea())
+                .background(AppColor.readerCanvas.ignoresSafeArea())
                 .toolbar(.hidden, for: .navigationBar)
                 .task {
                     await viewModel.load()
@@ -105,6 +125,18 @@
                             challengeRoute = nil
                             guard outcome == .completed else { return }
                             Task { await viewModel.reload() }
+                        }
+                    )
+                }
+                .sheet(isPresented: $showingChapterPicker) {
+                    // Presented alongside the other sheets rather than from
+                    // inside the bottom bar, so it stacks above the chrome.
+                    ChapterPickerView(
+                        chapters: chapters,
+                        currentChapter: currentChapter,
+                        onSelect: { chapter in
+                            showingChapterPicker = false
+                            openChapter(chapter)
                         }
                     )
                 }
@@ -132,8 +164,16 @@
 
         @ViewBuilder
         private func readerBody(_ viewModel: ReaderViewModel) -> some View {
-            if viewModel.isLoading {
+            // Keep the pages on screen during a reload: swapping them for a
+            // spinner would destroy the scroll view, lose the position and
+            // tear down every decoded image.
+            if viewModel.isLoading && viewModel.pages.isEmpty {
+                // The canvas is black in dark mode and light gray in light
+                // mode, so the label must not rely on the system default:
+                // it follows the on-surface token that contrasts with both.
                 ProgressView("Loading pages…")
+                    .tint(AppColor.primary)
+                    .foregroundStyle(AppColor.onSurface)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.pages.isEmpty {
                 ContentUnavailableView(
@@ -141,6 +181,7 @@
                     systemImage: "doc.richtext",
                     description: Text("This chapter has no readable pages.")
                 )
+                .foregroundStyle(AppColor.onSurface)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if readingDirection == .vertical {
                 verticalReader(viewModel)
@@ -156,28 +197,68 @@
         }
 
         /// Continuous vertical scrolling for the `vertical` reading mode.
+        ///
+        /// Every row reserves the page's real aspect ratio (falling back to a
+        /// portrait default until the first decode reports the size), so the
+        /// content height never collapses while rows leave and re-enter the
+        /// lazy stack. The page counter follows the row that covers the top
+        /// edge of the viewport instead of relying on `onAppear`, which fires
+        /// for prefetched rows and can race itself.
         private func verticalReader(_ viewModel: ReaderViewModel) -> some View {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
-                        CachedAsyncImage(
-                            url: page.imageURL,
-                            loader: dependencies.imageLoader,
-                            headers: page.headers,
-                            siteBaseURL: viewModel.manga.siteURL,
-                            contentMode: .fit,
-                            placeholderIcon: "photo",
-                            reloadID: reloadToken
-                        )
-                        .frame(maxWidth: .infinity)
-                        .onAppear {
-                            guard index != viewModel.currentPageIndex else { return }
-                            Task { await viewModel.setPage(index: index) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
+                            CachedAsyncImage(
+                                url: page.imageURL,
+                                loader: dependencies.imageLoader,
+                                headers: page.headers,
+                                siteBaseURL: viewModel.manga.siteURL,
+                                contentMode: .fit,
+                                placeholderIcon: "photo",
+                                reloadID: reloadToken,
+                                reservedAspectRatio: Self.aspectRatio(for: page),
+                                onImageSize: { size in
+                                    Task {
+                                        await viewModel.recordPageSize(
+                                            index: index,
+                                            width: Int(size.width.rounded()),
+                                            height: Int(size.height.rounded())
+                                        )
+                                    }
+                                }
+                            )
+                            .frame(maxWidth: .infinity)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: ReaderPageOffsetKey.self,
+                                        value: [
+                                            index: Double(
+                                                geometry.frame(in: .named(Self.scrollCoordinateSpace))
+                                                    .minY
+                                            )
+                                        ]
+                                    )
+                                }
+                            }
                         }
                     }
+                    .onPreferenceChange(ReaderPageOffsetKey.self) { offsets in
+                        updateCurrentPage(from: offsets, viewModel: viewModel)
+                    }
+                }
+                .coordinateSpace(name: Self.scrollCoordinateSpace)
+                .scrollIndicators(.hidden)
+                .id(viewModel.chapter.id)
+                .onAppear { restoreScrollPosition(with: proxy, viewModel: viewModel) }
+                .onChange(of: viewModel.pages.count) { _, _ in
+                    // The first `onAppear` runs while the page list is still
+                    // loading, so the restore also has to retry once it
+                    // arrives.
+                    restoreScrollPosition(with: proxy, viewModel: viewModel)
                 }
             }
-            .scrollIndicators(.hidden)
         }
 
         /// Horizontal paged reading for left-to-right and right-to-left modes.
@@ -198,7 +279,16 @@
                         siteBaseURL: viewModel.manga.siteURL,
                         contentMode: .fit,
                         placeholderIcon: "photo",
-                        reloadID: reloadToken
+                        reloadID: reloadToken,
+                        onImageSize: { size in
+                            Task {
+                                await viewModel.recordPageSize(
+                                    index: index,
+                                    width: Int(size.width.rounded()),
+                                    height: Int(size.height.rounded())
+                                )
+                            }
+                        }
                     )
                     .tag(index)
                     .padding(.horizontal)
@@ -206,6 +296,49 @@
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .environment(\.layoutDirection, readingDirection.layoutDirection)
+        }
+
+        /// Reserved width/height ratio for a page row.
+        private static func aspectRatio(for page: PageEntity) -> CGFloat {
+            guard let width = page.width, let height = page.height, width > 0, height > 0 else {
+                return defaultPageAspectRatio
+            }
+            return CGFloat(width) / CGFloat(height)
+        }
+
+        /// Tracks the page that covers the top edge of the vertical reader.
+        private func updateCurrentPage(from offsets: [Int: Double], viewModel: ReaderViewModel) {
+            // Ignore layout reports until the saved page has been restored:
+            // the first layout always reports the top row and would otherwise
+            // pull the reader back to the beginning.
+            guard didRestoreScroll else { return }
+            guard let index = ReaderViewModel.topmostPageIndex(minYs: offsets) else { return }
+            guard index != viewModel.currentPageIndex else { return }
+            Task { await viewModel.setPage(index: index) }
+        }
+
+        /// Moves the vertical reader to the saved page after the first layout.
+        private func restoreScrollPosition(with proxy: ScrollViewProxy, viewModel: ReaderViewModel) {
+            guard !didRestoreScroll else { return }
+            // Pages load asynchronously: wait for the list instead of marking
+            // the restore as done against an empty stack.
+            guard !viewModel.pages.isEmpty else { return }
+
+            let index = viewModel.currentPageIndex
+            guard index > 0, viewModel.pages.indices.contains(index) else {
+                didRestoreScroll = true
+                return
+            }
+            let pageID = viewModel.pages[index].id
+
+            Task { @MainActor in
+                // Let the lazy stack build its first rows before jumping to a
+                // page that may be far down the chapter.
+                await Task.yield()
+                proxy.scrollTo(pageID, anchor: .top)
+                await Task.yield()
+                didRestoreScroll = true
+            }
         }
 
         // MARK: - Chrome
@@ -246,6 +379,47 @@
             .overlay(alignment: .bottom) {
                 Divider().opacity(0.35)
             }
+        }
+
+        /// Background for the reader chrome.
+        ///
+        /// Light mode keeps the original thin material. In dark mode the bar
+        /// has to stay dark regardless of the page behind it: over a white
+        /// chapter a thin material washed out and the controls disappeared.
+        private func chromeGlass(ignoring edges: Edge.Set) -> some View {
+            Group {
+                if colorScheme == .dark {
+                    ZStack {
+                        Rectangle().fill(.regularMaterial)
+                        Color.black.opacity(0.35)
+                    }
+                    .environment(\.colorScheme, .dark)
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                }
+            }
+            .ignoresSafeArea(edges: edges)
+        }
+
+        /// Slim bar above the bottom bar that fills as the chapter is read.
+        ///
+        /// Mirrors the per-chapter progress shown in the series details, so the
+        /// reader always shows how far into the chapter it is.
+        private func chapterProgressBar(_ viewModel: ReaderViewModel) -> some View {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.12))
+                    Rectangle()
+                        .fill(AppColor.primary)
+                        .frame(width: geometry.size.width * viewModel.progress)
+                }
+            }
+            .frame(height: 3)
+            .animation(.easeOut(duration: 0.15), value: viewModel.progress)
+            .accessibilityElement()
+            .accessibilityLabel("Chapter progress")
+            .accessibilityValue("\(Int((viewModel.progress * 100).rounded())) percent")
         }
 
         /// Bottom bar anchored to the bottom edge: chapter navigation and picker.
@@ -295,19 +469,6 @@
             .padding(.horizontal, 8)
             .frame(height: 56)
             .frame(maxWidth: .infinity)
-            .overlay(alignment: .top) {
-                Divider().opacity(0.35)
-            }
-            .sheet(isPresented: $showingChapterPicker) {
-                ChapterPickerView(
-                    chapters: chapters,
-                    currentChapter: currentChapter,
-                    onSelect: { chapter in
-                        showingChapterPicker = false
-                        openChapter(chapter)
-                    }
-                )
-            }
         }
 
         private var currentChapterIndex: Int? {
@@ -341,6 +502,10 @@
         /// they are requested from the site again.
         private func reloadImages(_ viewModel: ReaderViewModel) {
             Task {
+                // Drop the decoded copies first: reloading exists to recover
+                // from pages the site served wrong, so the views must decode
+                // them again instead of reusing the cached bitmap.
+                DecodedImageCache.shared.removeImages(for: viewModel.pages.map(\.imageURL))
                 reloadToken += 1
                 await viewModel.reload()
             }
@@ -357,13 +522,16 @@
             Task {
                 await viewModel?.flushProgress()
 
+                didRestoreScroll = false
+
                 let newViewModel = ReaderViewModel(
                     manga: manga,
                     chapter: chapter,
                     pageRepository: pageRepository,
                     readingProgressRepository: readingProgressRepository,
                     mangaRepository: dependencies.mangaRepository,
-                    chapterPagesProvider: dependencies.chapterPagesProvider
+                    chapterPagesProvider: dependencies.chapterPagesProvider,
+                    startPosition: ReaderEntryPoint.manualStart(for: chapter)
                 )
                 currentChapter = chapter
                 viewModel = newViewModel
@@ -379,12 +547,14 @@
             return "Chapter \(String(format: "%g", number))"
         }
 
-        /// Warms the two pages after the current one so a swipe does not wait
-        /// for the network. Pages already in flight are deduplicated by the
-        /// pipeline, so repeated calls are cheap.
+        /// Warms the pages around the current one so a swipe or an upward
+        /// scroll does not wait for the network. The prefetch is symmetric:
+        /// scrolling back up is as common as reading forward. Pages already in
+        /// flight are deduplicated by the pipeline, so repeated calls are cheap.
         private func prefetchAdjacentPages(_ viewModel: ReaderViewModel) async {
             guard let loader = dependencies.imageLoader else { return }
-            let indices = [viewModel.currentPageIndex + 1, viewModel.currentPageIndex + 2]
+            let current = viewModel.currentPageIndex
+            let indices = [current - 2, current - 1, current + 1, current + 2]
                 .filter { $0 >= 0 && $0 < viewModel.pages.count }
             guard !indices.isEmpty else { return }
 
@@ -411,6 +581,16 @@
         }
     }
 
+    /// Vertical offset of every realised reader row, in the scroll view's
+    /// coordinate space.
+    private struct ReaderPageOffsetKey: PreferenceKey {
+        static let defaultValue: [Int: Double] = [:]
+
+        static func reduce(value: inout [Int: Double], nextValue: () -> [Int: Double]) {
+            value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+        }
+    }
+
     /// Sheet listing every chapter of the series, with the current one marked.
     private struct ChapterPickerView: View {
         let chapters: [ChapterEntity]
@@ -419,35 +599,51 @@
 
         @Environment(\.dismiss) private var dismiss
 
+        /// Height that shows at most five chapters, so the picker stays a
+        /// small popup instead of taking over the screen.
+        private var detentHeight: CGFloat {
+            let visibleRows = min(max(chapters.count, 1), 5)
+            return CGFloat(visibleRows) * 52 + 96
+        }
+
         var body: some View {
             NavigationStack {
-                List(chapters) { chapter in
-                    Button {
-                        onSelect(chapter)
-                    } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(chapter.title ?? Self.label(for: chapter))
-                                    .foregroundStyle(.primary)
-                                if chapter.title != nil, let number = chapter.number,
-                                    chapter.title != Self.label(for: number)
-                                {
-                                    Text(Self.label(for: number))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                ScrollViewReader { proxy in
+                    List(chapters) { chapter in
+                        Button {
+                            onSelect(chapter)
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(chapter.title ?? Self.label(for: chapter))
+                                        .foregroundStyle(.primary)
+                                    if chapter.title != nil, let number = chapter.number,
+                                        chapter.title != Self.label(for: number)
+                                    {
+                                        Text(Self.label(for: number))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
+                                Spacer(minLength: 0)
+
+                                if chapter.id == currentChapter.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
                                 }
                             }
-
-                            Spacer(minLength: 0)
-
-                            if chapter.id == currentChapter.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.tint)
-                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .listStyle(.plain)
+                    .task {
+                        // Open on the current chapter instead of the top of the
+                        // list: jumping backwards is the common case.
+                        await Task.yield()
+                        proxy.scrollTo(currentChapter.id, anchor: .center)
+                    }
                 }
                 .navigationTitle("Chapters")
                 .navigationBarTitleDisplayMode(.inline)
@@ -457,6 +653,8 @@
                     }
                 }
             }
+            .presentationDetents([.height(detentHeight)])
+            .presentationDragIndicator(.visible)
         }
 
         private static func label(for chapter: ChapterEntity) -> String {

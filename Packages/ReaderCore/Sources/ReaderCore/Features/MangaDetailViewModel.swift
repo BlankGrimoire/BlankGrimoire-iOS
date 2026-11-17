@@ -3,6 +3,19 @@
 import Foundation
 import Observation
 
+/// Chapter and position the "Resume" action opens.
+public struct ResumeTarget: Identifiable {
+    public let chapter: ChapterEntity
+    public let startPosition: ReaderStartPosition
+
+    public var id: String { "\(chapter.id)#\(startPosition.rawValue)" }
+
+    public init(chapter: ChapterEntity, startPosition: ReaderStartPosition) {
+        self.chapter = chapter
+        self.startPosition = startPosition
+    }
+}
+
 /// View model for manga detail view
 @MainActor
 @Observable
@@ -63,20 +76,55 @@ public final class MangaDetailViewModel {
         isLoadingChapters = false
     }
 
-    /// Chapter to open with the "Resume" action.
+    /// Chapter and position to open with the "Resume" action.
     ///
-    /// Prefers the series' last read chapter and falls back to the chapter
-    /// with the most recent progress, so the action also works for libraries
-    /// imported before `lastReadChapterId` was persisted.
-    public var resumeChapter: ChapterEntity? {
+    /// A finished chapter resumes at the next one; when the finished chapter is
+    /// also the last available one, the reader opens at its final page. An
+    /// unfinished chapter continues where it was left. The series' last read
+    /// chapter is preferred, falling back to the chapter with the most recent
+    /// progress so the action also works for libraries imported before
+    /// `lastReadChapterId` was persisted.
+    public var resumeTarget: ResumeTarget? {
+        let ordered = Self.sortedChapters(chapters)
+        guard let lastRead = lastReadChapter(in: ordered) else { return nil }
+
+        guard isCompleted(lastRead) else {
+            return ResumeTarget(chapter: lastRead, startPosition: .restore)
+        }
+
+        if let index = ordered.firstIndex(where: { $0.id == lastRead.id }),
+            ordered.indices.contains(index + 1)
+        {
+            return ResumeTarget(chapter: ordered[index + 1], startPosition: .beginning)
+        }
+
+        return ResumeTarget(chapter: lastRead, startPosition: .end)
+    }
+
+    /// Whether the reader reached the end of a chapter.
+    ///
+    /// The exact position lives on the series for the last read chapter, while
+    /// older chapters only carry their own progress entries. A chapter whose
+    /// page count is still unknown has to rely on its entries: treating it as
+    /// completed would send "Resume" to the next chapter after opening it once.
+    private func isCompleted(_ chapter: ChapterEntity) -> Bool {
+        if manga.lastReadChapterId == chapter.id, chapter.pageCount > 0 {
+            let totalPages = chapter.pageCount
+            let pageIndex = min(max(manga.lastReadPageIndex ?? 0, 0), totalPages - 1)
+            return Double(min(pageIndex + 1, totalPages)) / Double(totalPages) >= 1.0 - 0.0001
+        }
+        return chapter.isRead
+    }
+
+    private func lastReadChapter(in ordered: [ChapterEntity]) -> ChapterEntity? {
         if let lastReadChapterID = manga.lastReadChapterId,
-            let chapter = chapters.first(where: { $0.id == lastReadChapterID })
+            let chapter = ordered.first(where: { $0.id == lastReadChapterID })
         {
             return chapter
         }
 
         return
-            chapters
+            ordered
             .filter { !$0.readingProgressEntries.isEmpty }
             .max { lhs, rhs in
                 let left = lhs.readingProgressEntries.map(\.readAt).max() ?? .distantPast
