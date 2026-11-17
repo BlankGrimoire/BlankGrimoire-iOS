@@ -41,5 +41,15 @@
   "attribution": {
     "logo": ".site-logo img",
     "credits": ".site-credits"
+  },
+  "content": {
+    "strategies": [
+      {
+        "kind": "css-text",
+        "container": ".chapter-body",
+        "paragraph": ".chapter-body p",
+        "join": "\n\n"
+      }
+    ]
   }
 }

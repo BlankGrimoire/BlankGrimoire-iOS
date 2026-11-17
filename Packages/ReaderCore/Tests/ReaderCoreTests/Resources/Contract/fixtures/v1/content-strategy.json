@@ -1,0 +1,8 @@
+{
+  "kind": "css-text",
+  "container": ".chapter-body",
+  "paragraph": ".chapter-body p",
+  "title": "h1.chapter-title",
+  "remove": [".chapter-nav", ".promo-slot"],
+  "join": "\n\n"
+}
