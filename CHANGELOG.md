@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.0](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.3...v1.3.0) (2026-11-17)
+
+### Features
+
+* polish the reader, library, sites and palettes ([#34](https://github.com/BlankGrimoire/BlankGrimoire-iOS/issues/34)) ([003a358](https://github.com/BlankGrimoire/BlankGrimoire-iOS/commit/003a358627feaee8bd4885eddcdc7c01e159bb10))
+
 ## [1.2.3](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.2...v1.2.3) (2026-11-17)
 
 ### Bug Fixes
