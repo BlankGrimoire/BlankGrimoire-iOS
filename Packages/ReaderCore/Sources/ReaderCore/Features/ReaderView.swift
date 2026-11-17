@@ -88,7 +88,8 @@
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if isChromeVisible {
                         topBar(viewModel)
-                            .background(.ultraThinMaterial, ignoresSafeAreaEdges: .top)
+                            .background { Self.chromeGlass(ignoring: .top) }
+                            .environment(\.colorScheme, .dark)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
@@ -98,7 +99,8 @@
                             chapterProgressBar(viewModel)
                             bottomBar(viewModel)
                         }
-                        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
+                        .background { Self.chromeGlass(ignoring: .bottom) }
+                        .environment(\.colorScheme, .dark)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
@@ -124,6 +126,18 @@
                             challengeRoute = nil
                             guard outcome == .completed else { return }
                             Task { await viewModel.reload() }
+                        }
+                    )
+                }
+                .sheet(isPresented: $showingChapterPicker) {
+                    // Presented from here, not from the bottom bar, so the
+                    // picker follows the app theme instead of the dark chrome.
+                    ChapterPickerView(
+                        chapters: chapters,
+                        currentChapter: currentChapter,
+                        onSelect: { chapter in
+                            showingChapterPicker = false
+                            openChapter(chapter)
                         }
                     )
                 }
@@ -362,6 +376,22 @@
             }
         }
 
+        /// Dark glass behind the reader chrome.
+        ///
+        /// The reader canvas is black and pages are frequently white, so a
+        /// material that followed the system appearance washed out behind
+        /// those pages and left the controls unreadable. The chrome always
+        /// uses the dark variant, with a scrim that keeps the bar dark even
+        /// over a white page.
+        private static func chromeGlass(ignoring edges: Edge.Set) -> some View {
+            ZStack {
+                Rectangle().fill(.regularMaterial)
+                Color.black.opacity(0.35)
+            }
+            .environment(\.colorScheme, .dark)
+            .ignoresSafeArea(edges: edges)
+        }
+
         /// Slim bar above the bottom bar that fills as the chapter is read.
         ///
         /// Mirrors the per-chapter progress shown in the series details, so the
@@ -430,16 +460,6 @@
             .padding(.horizontal, 8)
             .frame(height: 56)
             .frame(maxWidth: .infinity)
-            .sheet(isPresented: $showingChapterPicker) {
-                ChapterPickerView(
-                    chapters: chapters,
-                    currentChapter: currentChapter,
-                    onSelect: { chapter in
-                        showingChapterPicker = false
-                        openChapter(chapter)
-                    }
-                )
-            }
         }
 
         private var currentChapterIndex: Int? {
