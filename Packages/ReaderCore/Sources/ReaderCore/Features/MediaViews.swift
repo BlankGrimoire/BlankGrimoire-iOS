@@ -193,22 +193,69 @@
         }
     }
 
-    /// Small site icon with a globe placeholder.
+    /// Small site icon, resolved from the site origin.
+    ///
+    /// Sites rarely agree on where the icon lives, so the usual browser
+    /// locations are tried in order and the first one that decodes wins. Only
+    /// relative paths are used: no icon service or domain is hardcoded.
     struct SiteFaviconImage: View {
         let baseURL: String
         let loader: (any ImageLoading)?
 
-        private var faviconURL: String? {
-            URL(string: baseURL)?.appending(path: "favicon.ico").absoluteString
-        }
+        private static let paths = [
+            "favicon.ico",
+            "favicon.png",
+            "apple-touch-icon.png",
+            "apple-touch-icon-precomposed.png",
+        ]
+
+        @State private var image: UIImage?
 
         var body: some View {
-            CachedAsyncImage(
-                url: faviconURL,
-                loader: loader,
-                contentMode: .fit,
-                placeholderIcon: "globe"
-            )
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: "globe")
+                        .font(.body)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
+                }
+            }
+            .task(id: baseURL) { await load() }
+        }
+
+        private func load() async {
+            image = nil
+            guard let loader, let origin = Self.origin(of: baseURL) else { return }
+
+            for path in Self.paths {
+                let url = origin.appending(path: path).absoluteString
+                guard
+                    let data = try? await loader.loadImageData(
+                        for: url,
+                        headers: nil,
+                        siteBaseURL: nil
+                    )
+                else { continue }
+
+                if let decoded = UIImage(data: data) {
+                    image = decoded
+                    return
+                }
+            }
+        }
+
+        /// Scheme and host of the profile, without its path.
+        private static func origin(of baseURL: String) -> URL? {
+            guard let url = URL(string: baseURL),
+                var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { return nil }
+            components.path = ""
+            components.query = nil
+            components.fragment = nil
+            return components.url
         }
     }
 #endif
