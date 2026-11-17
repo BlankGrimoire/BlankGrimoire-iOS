@@ -57,6 +57,7 @@
                     if isLoading {
                         ProgressView()
                             .controlSize(.small)
+                            .tint(AppColor.primary)
                     } else {
                         Image(systemName: placeholderIcon)
                             .font(.title)

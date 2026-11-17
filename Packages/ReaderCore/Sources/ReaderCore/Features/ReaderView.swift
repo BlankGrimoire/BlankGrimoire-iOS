@@ -168,7 +168,12 @@
             // spinner would destroy the scroll view, lose the position and
             // tear down every decoded image.
             if viewModel.isLoading && viewModel.pages.isEmpty {
+                // The canvas is black in dark mode and light gray in light
+                // mode, so the label must not rely on the system default:
+                // it follows the on-surface token that contrasts with both.
                 ProgressView("Loading pages…")
+                    .tint(AppColor.primary)
+                    .foregroundStyle(AppColor.onSurface)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.pages.isEmpty {
                 ContentUnavailableView(
@@ -176,6 +181,7 @@
                     systemImage: "doc.richtext",
                     description: Text("This chapter has no readable pages.")
                 )
+                .foregroundStyle(AppColor.onSurface)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if readingDirection == .vertical {
                 verticalReader(viewModel)
