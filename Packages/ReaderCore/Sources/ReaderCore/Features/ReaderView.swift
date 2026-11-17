@@ -81,7 +81,7 @@
         private func readerContent(_ viewModel: ReaderViewModel) -> some View {
             readerBody(viewModel)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
+                .background(AppColor.readerCanvas)
                 .contentShape(Rectangle())
                 .simultaneousGesture(
                     TapGesture().onEnded { toggleChrome() }
@@ -103,7 +103,7 @@
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .background(Color.black.ignoresSafeArea())
+                .background(AppColor.readerCanvas.ignoresSafeArea())
                 .toolbar(.hidden, for: .navigationBar)
                 .task {
                     await viewModel.load()
