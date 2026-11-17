@@ -22,9 +22,18 @@
         var placeholderIcon: String = "book.closed"
         /// Bumped by the reader to force a fresh request for the same URL.
         var reloadID: Int = 0
+        /// Width/height ratio reserved while the image downloads.
+        ///
+        /// Reader rows must not collapse to the shape's intrinsic height: a
+        /// 10pt placeholder inside a lazy stack changes the content height on
+        /// every appearance and makes the scroll view jump.
+        var reservedAspectRatio: CGFloat? = nil
+        /// Reports the decoded pixel size so the reader can remember it.
+        var onImageSize: ((CGSize) -> Void)? = nil
 
         @State private var image: UIImage?
         @State private var isLoading = false
+        @State private var displayedURL: String?
 
         var body: some View {
             Group {
@@ -42,7 +51,7 @@
         }
 
         private var placeholder: some View {
-            Rectangle()
+            let base = Rectangle()
                 .fill(AppColor.surfaceVariant)
                 .overlay {
                     if isLoading {
@@ -54,11 +63,38 @@
                             .foregroundStyle(.tertiary)
                     }
                 }
+
+            return Group {
+                if let reservedAspectRatio, reservedAspectRatio > 0 {
+                    base.aspectRatio(reservedAspectRatio, contentMode: .fit)
+                } else {
+                    base
+                }
+            }
         }
 
         private func load() async {
-            image = nil
-            guard let url, let loader else { return }
+            guard let url, let loader else {
+                image = nil
+                displayedURL = nil
+                return
+            }
+
+            if displayedURL != url {
+                // The view was recycled for another page: never keep the
+                // previous image on screen while the new one downloads.
+                image = nil
+                displayedURL = url
+            }
+
+            // Re-entering the lazy stack: render the already decoded page
+            // right away instead of collapsing the row back to its
+            // placeholder.
+            if let cached = DecodedImageCache.shared.image(for: url) {
+                image = cached
+                reportSize(of: cached)
+                return
+            }
 
             isLoading = true
             defer { isLoading = false }
@@ -73,12 +109,23 @@
                 // Use ImageIO for robust WebP decoding (supports more variants than UIImage(data:))
                 if let uiImage = decodeImage(data: data) {
                     image = uiImage
+                    DecodedImageCache.shared.insert(uiImage, for: url)
+                    reportSize(of: uiImage)
                 } else {
-                    // Decoding failed. Keep placeholder.
+                    // Decoding failed. Keep the previous image or placeholder.
                 }
             } catch {
-                // Image failures are non-fatal: keep the placeholder.
+                // Image failures are non-fatal: keep the previous image or
+                // placeholder. A later reload bumps `reloadID` and retries.
             }
+        }
+
+        private func reportSize(of image: UIImage) {
+            guard let onImageSize else { return }
+            let scale = image.scale
+            onImageSize(
+                CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            )
         }
 
         private func decodeImage(data: Data) -> UIImage? {

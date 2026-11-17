@@ -16,8 +16,18 @@
         @State private var isChromeVisible = true
         @State private var showingChapterPicker = false
         @State private var reloadToken = 0
+        /// Becomes true once the vertical reader restored the saved page.
+        ///
+        /// Scroll updates are ignored until then: the first layout reports the
+        /// top row, which would otherwise overwrite the restored index before
+        /// the scroll view has moved to it.
+        @State private var didRestoreScroll = false
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @Environment(\.dismiss) private var dismiss
+
+        /// Fallback portrait ratio used until a page reports its real size.
+        private static let defaultPageAspectRatio: CGFloat = 0.7
+        private static let scrollCoordinateSpace = "readerVerticalScroll"
 
         public init(
             manga: MangaEntity,
@@ -132,7 +142,10 @@
 
         @ViewBuilder
         private func readerBody(_ viewModel: ReaderViewModel) -> some View {
-            if viewModel.isLoading {
+            // Keep the pages on screen during a reload: swapping them for a
+            // spinner would destroy the scroll view, lose the position and
+            // tear down every decoded image.
+            if viewModel.isLoading && viewModel.pages.isEmpty {
                 ProgressView("Loading pages…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.pages.isEmpty {
@@ -156,28 +169,68 @@
         }
 
         /// Continuous vertical scrolling for the `vertical` reading mode.
+        ///
+        /// Every row reserves the page's real aspect ratio (falling back to a
+        /// portrait default until the first decode reports the size), so the
+        /// content height never collapses while rows leave and re-enter the
+        /// lazy stack. The page counter follows the row that covers the top
+        /// edge of the viewport instead of relying on `onAppear`, which fires
+        /// for prefetched rows and can race itself.
         private func verticalReader(_ viewModel: ReaderViewModel) -> some View {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
-                        CachedAsyncImage(
-                            url: page.imageURL,
-                            loader: dependencies.imageLoader,
-                            headers: page.headers,
-                            siteBaseURL: viewModel.manga.siteURL,
-                            contentMode: .fit,
-                            placeholderIcon: "photo",
-                            reloadID: reloadToken
-                        )
-                        .frame(maxWidth: .infinity)
-                        .onAppear {
-                            guard index != viewModel.currentPageIndex else { return }
-                            Task { await viewModel.setPage(index: index) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
+                            CachedAsyncImage(
+                                url: page.imageURL,
+                                loader: dependencies.imageLoader,
+                                headers: page.headers,
+                                siteBaseURL: viewModel.manga.siteURL,
+                                contentMode: .fit,
+                                placeholderIcon: "photo",
+                                reloadID: reloadToken,
+                                reservedAspectRatio: Self.aspectRatio(for: page),
+                                onImageSize: { size in
+                                    Task {
+                                        await viewModel.recordPageSize(
+                                            index: index,
+                                            width: Int(size.width.rounded()),
+                                            height: Int(size.height.rounded())
+                                        )
+                                    }
+                                }
+                            )
+                            .frame(maxWidth: .infinity)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: ReaderPageOffsetKey.self,
+                                        value: [
+                                            index: Double(
+                                                geometry.frame(in: .named(Self.scrollCoordinateSpace))
+                                                    .minY
+                                            )
+                                        ]
+                                    )
+                                }
+                            }
                         }
                     }
+                    .onPreferenceChange(ReaderPageOffsetKey.self) { offsets in
+                        updateCurrentPage(from: offsets, viewModel: viewModel)
+                    }
+                }
+                .coordinateSpace(name: Self.scrollCoordinateSpace)
+                .scrollIndicators(.hidden)
+                .id(viewModel.chapter.id)
+                .onAppear { restoreScrollPosition(with: proxy, viewModel: viewModel) }
+                .onChange(of: viewModel.pages.count) { _, _ in
+                    // The first `onAppear` runs while the page list is still
+                    // loading, so the restore also has to retry once it
+                    // arrives.
+                    restoreScrollPosition(with: proxy, viewModel: viewModel)
                 }
             }
-            .scrollIndicators(.hidden)
         }
 
         /// Horizontal paged reading for left-to-right and right-to-left modes.
@@ -198,7 +251,16 @@
                         siteBaseURL: viewModel.manga.siteURL,
                         contentMode: .fit,
                         placeholderIcon: "photo",
-                        reloadID: reloadToken
+                        reloadID: reloadToken,
+                        onImageSize: { size in
+                            Task {
+                                await viewModel.recordPageSize(
+                                    index: index,
+                                    width: Int(size.width.rounded()),
+                                    height: Int(size.height.rounded())
+                                )
+                            }
+                        }
                     )
                     .tag(index)
                     .padding(.horizontal)
@@ -206,6 +268,49 @@
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .environment(\.layoutDirection, readingDirection.layoutDirection)
+        }
+
+        /// Reserved width/height ratio for a page row.
+        private static func aspectRatio(for page: PageEntity) -> CGFloat {
+            guard let width = page.width, let height = page.height, width > 0, height > 0 else {
+                return defaultPageAspectRatio
+            }
+            return CGFloat(width) / CGFloat(height)
+        }
+
+        /// Tracks the page that covers the top edge of the vertical reader.
+        private func updateCurrentPage(from offsets: [Int: Double], viewModel: ReaderViewModel) {
+            // Ignore layout reports until the saved page has been restored:
+            // the first layout always reports the top row and would otherwise
+            // pull the reader back to the beginning.
+            guard didRestoreScroll else { return }
+            guard let index = ReaderViewModel.topmostPageIndex(minYs: offsets) else { return }
+            guard index != viewModel.currentPageIndex else { return }
+            Task { await viewModel.setPage(index: index) }
+        }
+
+        /// Moves the vertical reader to the saved page after the first layout.
+        private func restoreScrollPosition(with proxy: ScrollViewProxy, viewModel: ReaderViewModel) {
+            guard !didRestoreScroll else { return }
+            // Pages load asynchronously: wait for the list instead of marking
+            // the restore as done against an empty stack.
+            guard !viewModel.pages.isEmpty else { return }
+
+            let index = viewModel.currentPageIndex
+            guard index > 0, viewModel.pages.indices.contains(index) else {
+                didRestoreScroll = true
+                return
+            }
+            let pageID = viewModel.pages[index].id
+
+            Task { @MainActor in
+                // Let the lazy stack build its first rows before jumping to a
+                // page that may be far down the chapter.
+                await Task.yield()
+                proxy.scrollTo(pageID, anchor: .top)
+                await Task.yield()
+                didRestoreScroll = true
+            }
         }
 
         // MARK: - Chrome
@@ -341,6 +446,10 @@
         /// they are requested from the site again.
         private func reloadImages(_ viewModel: ReaderViewModel) {
             Task {
+                // Drop the decoded copies first: reloading exists to recover
+                // from pages the site served wrong, so the views must decode
+                // them again instead of reusing the cached bitmap.
+                DecodedImageCache.shared.removeImages(for: viewModel.pages.map(\.imageURL))
                 reloadToken += 1
                 await viewModel.reload()
             }
@@ -356,6 +465,8 @@
 
             Task {
                 await viewModel?.flushProgress()
+
+                didRestoreScroll = false
 
                 let newViewModel = ReaderViewModel(
                     manga: manga,
@@ -379,12 +490,14 @@
             return "Chapter \(String(format: "%g", number))"
         }
 
-        /// Warms the two pages after the current one so a swipe does not wait
-        /// for the network. Pages already in flight are deduplicated by the
-        /// pipeline, so repeated calls are cheap.
+        /// Warms the pages around the current one so a swipe or an upward
+        /// scroll does not wait for the network. The prefetch is symmetric:
+        /// scrolling back up is as common as reading forward. Pages already in
+        /// flight are deduplicated by the pipeline, so repeated calls are cheap.
         private func prefetchAdjacentPages(_ viewModel: ReaderViewModel) async {
             guard let loader = dependencies.imageLoader else { return }
-            let indices = [viewModel.currentPageIndex + 1, viewModel.currentPageIndex + 2]
+            let current = viewModel.currentPageIndex
+            let indices = [current - 2, current - 1, current + 1, current + 2]
                 .filter { $0 >= 0 && $0 < viewModel.pages.count }
             guard !indices.isEmpty else { return }
 
@@ -408,6 +521,16 @@
                 return []
             }
             return [host]
+        }
+    }
+
+    /// Vertical offset of every realised reader row, in the scroll view's
+    /// coordinate space.
+    private struct ReaderPageOffsetKey: PreferenceKey {
+        static let defaultValue: [Int: Double] = [:]
+
+        static func reduce(value: inout [Int: Double], nextValue: () -> [Int: Double]) {
+            value.merge(nextValue(), uniquingKeysWith: { _, new in new })
         }
     }
 

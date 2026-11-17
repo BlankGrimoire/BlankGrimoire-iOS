@@ -122,6 +122,37 @@ public final class ReaderViewModel {
         scheduleProgressSave()
     }
 
+    /// Remembers a page's decoded pixel size so the vertical reader can
+    /// reserve the same space when the row is rebuilt.
+    ///
+    /// `PageEntity` already models the size; without it every revisit starts
+    /// from the fallback ratio, the content height changes under the finger
+    /// and the scroll view jumps.
+    public func recordPageSize(index: Int, width: Int, height: Int) async {
+        guard width > 0, height > 0, pages.indices.contains(index) else { return }
+
+        let page = pages[index]
+        guard page.width != width || page.height != height else { return }
+
+        page.width = width
+        page.height = height
+        try? await pageRepository.save(page)
+    }
+
+    /// Index of the page that covers the top edge of the viewport.
+    ///
+    /// `minYs` maps page indices to their top offsets in the scroll view's
+    /// coordinate space. A non-positive offset means the row starts above the
+    /// viewport, so the greatest such offset is the page being read. Before
+    /// the first scroll every row is still below the top edge and the earliest
+    /// one wins.
+    public nonisolated static func topmostPageIndex(minYs: [Int: Double]) -> Int? {
+        if let covering = minYs.filter({ $0.value <= 0 }).max(by: { $0.value < $1.value }) {
+            return covering.key
+        }
+        return minYs.min(by: { $0.value < $1.value })?.key
+    }
+
     /// Schedules a debounced progress write for rapid page changes.
     private func scheduleProgressSave() {
         saveDebounceTask?.cancel()
