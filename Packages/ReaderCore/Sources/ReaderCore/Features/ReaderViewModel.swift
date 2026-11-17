@@ -20,7 +20,12 @@ public final class ReaderViewModel {
     private let readingProgressRepository: any ReadingProgressRepository
     private let mangaRepository: any MangaRepository
     private let chapterPagesProvider: (any ChapterPagesProviding)?
+    /// Where this chapter starts when it is opened.
+    private let startPosition: ReaderStartPosition
     private var hasLoaded = false
+    /// Set once the start position has been applied, so a reload keeps the
+    /// page the reader is on instead of jumping back to the entry point.
+    private var hasAppliedStartPosition = false
 
     /// Debounces progress writes triggered by page swipes.
     private var saveDebounceTask: Task<Void, Never>?
@@ -41,7 +46,8 @@ public final class ReaderViewModel {
         pageRepository: any PageRepository,
         readingProgressRepository: any ReadingProgressRepository,
         mangaRepository: any MangaRepository,
-        chapterPagesProvider: (any ChapterPagesProviding)? = nil
+        chapterPagesProvider: (any ChapterPagesProviding)? = nil,
+        startPosition: ReaderStartPosition = .restore
     ) {
         self.manga = manga
         self.chapter = chapter
@@ -49,6 +55,7 @@ public final class ReaderViewModel {
         self.readingProgressRepository = readingProgressRepository
         self.mangaRepository = mangaRepository
         self.chapterPagesProvider = chapterPagesProvider
+        self.startPosition = startPosition
     }
 
     public var totalPages: Int {
@@ -96,10 +103,28 @@ public final class ReaderViewModel {
                 ).sorted { $0.index < $1.index }
             }
             pages = loaded
-            currentPageIndex = try await restoredPageIndex()
+            if hasAppliedStartPosition {
+                // A reload must not send the reader back to the entry point.
+                currentPageIndex = clampedPageIndex(currentPageIndex)
+            } else {
+                currentPageIndex = try await initialPageIndex()
+                hasAppliedStartPosition = true
+            }
             hasLoaded = true
         } catch {
             lastError = error
+        }
+    }
+
+    /// Page the chapter opens at, honouring the caller's intent.
+    private func initialPageIndex() async throws -> Int {
+        switch startPosition {
+        case .restore:
+            return try await restoredPageIndex()
+        case .beginning:
+            return clampedPageIndex(0)
+        case .end:
+            return clampedPageIndex(max(totalPages - 1, 0))
         }
     }
 

@@ -144,6 +144,137 @@ final class MangaDetailViewModelTests: XCTestCase {
         XCTAssertFalse(deleted)
         XCTAssertNotNil(viewModel.lastError)
     }
+
+    func testResumeContinuesAnUnfinishedChapter() async {
+        let manga = MangaEntity(id: "manga", title: "Series")
+        manga.lastReadChapterId = "c-2"
+        manga.lastReadPageIndex = 4
+        let chapters = [
+            ChapterEntity(id: "c-1", number: 1, pageCount: 10),
+            ChapterEntity(id: "c-2", number: 2, pageCount: 10),
+            ChapterEntity(id: "c-3", number: 3, pageCount: 10),
+        ]
+        let viewModel = MangaDetailViewModel(
+            manga: manga,
+            chapterRepository: StubChapterRepository(chapters: chapters),
+            mangaRepository: StubMangaRepository(manga: manga)
+        )
+        await viewModel.loadChapters()
+
+        XCTAssertEqual(viewModel.resumeTarget?.chapter.id, "c-2")
+        XCTAssertEqual(viewModel.resumeTarget?.startPosition, .restore)
+    }
+
+    func testResumeMovesToTheNextChapterAfterAFinishedOne() async {
+        let manga = MangaEntity(id: "manga", title: "Series")
+        manga.lastReadChapterId = "c-2"
+        manga.lastReadPageIndex = 9
+        let chapters = [
+            ChapterEntity(id: "c-1", number: 1, pageCount: 10),
+            ChapterEntity(id: "c-2", number: 2, pageCount: 10),
+            ChapterEntity(id: "c-3", number: 3, pageCount: 10),
+        ]
+        let viewModel = MangaDetailViewModel(
+            manga: manga,
+            chapterRepository: StubChapterRepository(chapters: chapters),
+            mangaRepository: StubMangaRepository(manga: manga)
+        )
+        await viewModel.loadChapters()
+
+        XCTAssertEqual(viewModel.resumeTarget?.chapter.id, "c-3")
+        XCTAssertEqual(viewModel.resumeTarget?.startPosition, .beginning)
+    }
+
+    func testResumeOpensTheEndOfTheSeriesWhenItIsFinished() async {
+        let manga = MangaEntity(id: "manga", title: "Series")
+        manga.lastReadChapterId = "c-3"
+        manga.lastReadPageIndex = 9
+        let chapters = [
+            ChapterEntity(id: "c-1", number: 1, pageCount: 10),
+            ChapterEntity(id: "c-2", number: 2, pageCount: 10),
+            ChapterEntity(id: "c-3", number: 3, pageCount: 10),
+        ]
+        let viewModel = MangaDetailViewModel(
+            manga: manga,
+            chapterRepository: StubChapterRepository(chapters: chapters),
+            mangaRepository: StubMangaRepository(manga: manga)
+        )
+        await viewModel.loadChapters()
+
+        XCTAssertEqual(viewModel.resumeTarget?.chapter.id, "c-3")
+        XCTAssertEqual(viewModel.resumeTarget?.startPosition, .end)
+    }
+
+    func testResumeKeepsAnUnknownLengthChapterInProgress() async {
+        // Chapters imported without a page count must not look finished after
+        // being opened once, or Resume would skip them.
+        let manga = MangaEntity(id: "manga", title: "Series")
+        manga.lastReadChapterId = "c-1"
+        manga.lastReadPageIndex = 0
+        let chapters = [
+            ChapterEntity(id: "c-1", number: 1, pageCount: 0),
+            ChapterEntity(id: "c-2", number: 2, pageCount: 0),
+        ]
+        let viewModel = MangaDetailViewModel(
+            manga: manga,
+            chapterRepository: StubChapterRepository(chapters: chapters),
+            mangaRepository: StubMangaRepository(manga: manga)
+        )
+        await viewModel.loadChapters()
+
+        XCTAssertEqual(viewModel.resumeTarget?.chapter.id, "c-1")
+        XCTAssertEqual(viewModel.resumeTarget?.startPosition, .restore)
+    }
+
+    func testResumeFallsBackToTheLatestProgressEntry() async {
+        // Libraries imported before `lastReadChapterId` was persisted only
+        // have progress entries.
+        let manga = MangaEntity(id: "manga", title: "Series")
+        let first = ChapterEntity(id: "c-1", number: 1, pageCount: 10)
+        let second = ChapterEntity(id: "c-2", number: 2, pageCount: 10)
+        let older = ReadingProgressEntity(pageIndex: 2, totalPages: 10, manga: manga, chapter: first)
+        older.readAt = Date(timeIntervalSince1970: 100)
+        let newer = ReadingProgressEntity(pageIndex: 4, totalPages: 10, manga: manga, chapter: second)
+        newer.readAt = Date(timeIntervalSince1970: 200)
+        first.readingProgressEntries = [older]
+        second.readingProgressEntries = [newer]
+
+        let viewModel = MangaDetailViewModel(
+            manga: manga,
+            chapterRepository: StubChapterRepository(chapters: [first, second]),
+            mangaRepository: StubMangaRepository(manga: manga)
+        )
+        await viewModel.loadChapters()
+
+        XCTAssertEqual(viewModel.resumeTarget?.chapter.id, "c-2")
+        XCTAssertEqual(viewModel.resumeTarget?.startPosition, .restore)
+    }
+
+    func testManualOpenRestartsAFinishedChapterFromTheBeginning() {
+        let manga = MangaEntity(id: "manga", title: "Series")
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 10)
+        let progress = ReadingProgressEntity(pageIndex: 9, totalPages: 10, manga: manga, chapter: chapter)
+        chapter.readingProgressEntries = [progress]
+
+        XCTAssertTrue(chapter.isRead)
+        XCTAssertEqual(ReaderEntryPoint.manualStart(for: chapter), .beginning)
+    }
+
+    func testManualOpenResumesAnUnfinishedChapter() {
+        let manga = MangaEntity(id: "manga", title: "Series")
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 10)
+        let progress = ReadingProgressEntity(pageIndex: 3, totalPages: 10, manga: manga, chapter: chapter)
+        chapter.readingProgressEntries = [progress]
+
+        XCTAssertFalse(chapter.isRead)
+        XCTAssertEqual(ReaderEntryPoint.manualStart(for: chapter), .restore)
+    }
+
+    func testManualOpenRestoresAChapterWithoutProgress() {
+        let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 10)
+
+        XCTAssertEqual(ReaderEntryPoint.manualStart(for: chapter), .restore)
+    }
 }
 
 private enum StubFailure: Error {

@@ -197,6 +197,77 @@ final class ReaderViewModelTests: XCTestCase {
     func testTopmostPageIndexIsNilWithoutRows() {
         XCTAssertNil(ReaderViewModel.topmostPageIndex(minYs: [:]))
     }
+
+    func testStartPositionBeginningIgnoresSavedProgress() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progress = ReadingProgressEntity(
+            pageIndex: 2,
+            totalPages: 3,
+            manga: manga,
+            chapter: chapter
+        )
+        let pages = (0..<3).map { PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg") }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
+            mangaRepository: TestMangaRepository(manga: manga),
+            startPosition: .beginning
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 0)
+        XCTAssertEqual(viewModel.pageNumber, 1)
+    }
+
+    func testStartPositionEndOpensLastPage() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let pages = (0..<3).map { PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg") }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga),
+            startPosition: .end
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 2)
+        XCTAssertEqual(viewModel.pageNumber, 3)
+        XCTAssertEqual(viewModel.progress, 1.0, accuracy: 0.001)
+    }
+
+    func testReloadKeepsTheCurrentPageInsteadOfTheEntryPoint() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let pages = (0..<3).map { PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg") }
+        let loaded = pages.map { PageEntity(index: $0.index, imageURL: $0.imageURL) }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga),
+            chapterPagesProvider: TestChapterPagesProvider(pages: loaded),
+            startPosition: .beginning
+        )
+        await viewModel.load()
+        await viewModel.setPage(index: 2)
+
+        await viewModel.reload()
+
+        // A reload after a challenge must not send the reader back to page 1.
+        XCTAssertEqual(viewModel.currentPageIndex, 2)
+    }
 }
 
 @MainActor

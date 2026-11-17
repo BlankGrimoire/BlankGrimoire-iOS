@@ -22,6 +22,9 @@
         /// top row, which would otherwise overwrite the restored index before
         /// the scroll view has moved to it.
         @State private var didRestoreScroll = false
+        /// Page the reader opens at. Captured once, so a reload keeps the
+        /// current page instead of returning to the entry point.
+        private let startPosition: ReaderStartPosition
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
         @Environment(\.dismiss) private var dismiss
 
@@ -33,12 +36,14 @@
             manga: MangaEntity,
             chapter: ChapterEntity,
             chapters: [ChapterEntity] = [],
-            dependencies: FeaturesDependencies
+            dependencies: FeaturesDependencies,
+            startPosition: ReaderStartPosition = .restore
         ) {
             self.dependencies = dependencies
             self.manga = manga
             self.chapters = chapters.isEmpty ? manga.chaptersInReadingOrder : chapters
             self._currentChapter = State(initialValue: chapter)
+            self.startPosition = startPosition
 
             if let pageRepository = dependencies.pageRepository,
                 let readingProgressRepository = dependencies.readingProgressRepository
@@ -50,7 +55,8 @@
                         pageRepository: pageRepository,
                         readingProgressRepository: readingProgressRepository,
                         mangaRepository: dependencies.mangaRepository,
-                        chapterPagesProvider: dependencies.chapterPagesProvider
+                        chapterPagesProvider: dependencies.chapterPagesProvider,
+                        startPosition: startPosition
                     )
                 )
             } else {
@@ -88,9 +94,12 @@
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if isChromeVisible {
-                        bottomBar(viewModel)
-                            .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        VStack(spacing: 0) {
+                            chapterProgressBar(viewModel)
+                            bottomBar(viewModel)
+                        }
+                        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 .background(Color.black.ignoresSafeArea())
@@ -353,6 +362,27 @@
             }
         }
 
+        /// Slim bar above the bottom bar that fills as the chapter is read.
+        ///
+        /// Mirrors the per-chapter progress shown in the series details, so the
+        /// reader always shows how far into the chapter it is.
+        private func chapterProgressBar(_ viewModel: ReaderViewModel) -> some View {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.12))
+                    Rectangle()
+                        .fill(AppColor.primary)
+                        .frame(width: geometry.size.width * viewModel.progress)
+                }
+            }
+            .frame(height: 3)
+            .animation(.easeOut(duration: 0.15), value: viewModel.progress)
+            .accessibilityElement()
+            .accessibilityLabel("Chapter progress")
+            .accessibilityValue("\(Int((viewModel.progress * 100).rounded())) percent")
+        }
+
         /// Bottom bar anchored to the bottom edge: chapter navigation and picker.
         private func bottomBar(_ viewModel: ReaderViewModel) -> some View {
             HStack(spacing: 8) {
@@ -400,9 +430,6 @@
             .padding(.horizontal, 8)
             .frame(height: 56)
             .frame(maxWidth: .infinity)
-            .overlay(alignment: .top) {
-                Divider().opacity(0.35)
-            }
             .sheet(isPresented: $showingChapterPicker) {
                 ChapterPickerView(
                     chapters: chapters,
@@ -474,7 +501,8 @@
                     pageRepository: pageRepository,
                     readingProgressRepository: readingProgressRepository,
                     mangaRepository: dependencies.mangaRepository,
-                    chapterPagesProvider: dependencies.chapterPagesProvider
+                    chapterPagesProvider: dependencies.chapterPagesProvider,
+                    startPosition: ReaderEntryPoint.manualStart(for: chapter)
                 )
                 currentChapter = chapter
                 viewModel = newViewModel

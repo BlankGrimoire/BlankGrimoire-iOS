@@ -131,7 +131,9 @@
 
     private struct ReaderRoute: Identifiable {
         let chapter: ChapterEntity
-        var id: String { chapter.id }
+        let startPosition: ReaderStartPosition
+
+        var id: String { "\(chapter.id)#\(startPosition.rawValue)" }
     }
 
     private struct ChallengeRoute: Identifiable {
@@ -352,9 +354,12 @@
 
                     Spacer()
 
-                    if let resumeChapter = viewModel.resumeChapter {
+                    if let resumeTarget = viewModel.resumeTarget {
                         Button {
-                            readerRoute = ReaderRoute(chapter: resumeChapter)
+                            readerRoute = ReaderRoute(
+                                chapter: resumeTarget.chapter,
+                                startPosition: resumeTarget.startPosition
+                            )
                         } label: {
                             Label("Resume", systemImage: "play.fill")
                                 .font(.subheadline.weight(.semibold))
@@ -385,7 +390,10 @@
                                     $0.readAt < $1.readAt
                                 })?.progress ?? 0
                             ) {
-                                readerRoute = ReaderRoute(chapter: chapter)
+                                readerRoute = ReaderRoute(
+                                    chapter: chapter,
+                                    startPosition: ReaderEntryPoint.manualStart(for: chapter)
+                                )
                             }
                         }
                     }
@@ -461,7 +469,8 @@
                     manga: manga,
                     chapter: route.chapter,
                     chapters: viewModel.chapters,
-                    dependencies: dependencies
+                    dependencies: dependencies,
+                    startPosition: route.startPosition
                 )
             }
             .onChange(of: viewModel.challengeURL) { _, url in
