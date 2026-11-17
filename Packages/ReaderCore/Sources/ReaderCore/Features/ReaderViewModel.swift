@@ -171,11 +171,38 @@ public final class ReaderViewModel {
     /// viewport, so the greatest such offset is the page being read. Before
     /// the first scroll every row is still below the top edge and the earliest
     /// one wins.
-    public nonisolated static func topmostPageIndex(minYs: [Int: Double]) -> Int? {
-        if let covering = minYs.filter({ $0.value <= 0 }).max(by: { $0.value < $1.value }) {
+    ///
+    /// `tolerance` absorbs the fractional offsets SwiftUI reports at the end
+    /// of a scrolled list, where a row can sit a hair below the top edge.
+    public nonisolated static func topmostPageIndex(minYs: [Int: Double], tolerance: Double = 1) -> Int? {
+        if let covering = minYs.filter({ $0.value <= tolerance }).max(by: { $0.value < $1.value }) {
             return covering.key
         }
         return minYs.min(by: { $0.value < $1.value })?.key
+    }
+
+    /// Page considered current for a given scroll position.
+    ///
+    /// Page images do not share a ratio: a short last image may never reach
+    /// the top edge, so the chapter would never look finished. Once the last
+    /// page is fully visible the reader is at the end of the chapter, and the
+    /// last page becomes current regardless of which row covers the top.
+    public nonisolated static func currentPageIndex(
+        minYs: [Int: Double],
+        lastPageIndex: Int,
+        lastPageBottom: Double?,
+        viewportHeight: Double,
+        tolerance: Double = 1
+    ) -> Int? {
+        guard !minYs.isEmpty else { return nil }
+
+        if minYs[lastPageIndex] != nil, let lastPageBottom,
+            lastPageBottom <= viewportHeight + tolerance
+        {
+            return lastPageIndex
+        }
+
+        return topmostPageIndex(minYs: minYs, tolerance: tolerance)
     }
 
     /// Schedules a debounced progress write for rapid page changes.

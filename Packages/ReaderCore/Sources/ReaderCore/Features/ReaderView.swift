@@ -32,6 +32,9 @@
         /// Fallback portrait ratio used until a page reports its real size.
         private static let defaultPageAspectRatio: CGFloat = 0.7
         private static let scrollCoordinateSpace = "readerVerticalScroll"
+        /// Fraction of the viewport added below the last page so it can be
+        /// scrolled past the bottom edge.
+        private static let endOverscrollFraction: CGFloat = 0.35
 
         public init(
             manga: MangaEntity,
@@ -204,59 +207,78 @@
         /// lazy stack. The page counter follows the row that covers the top
         /// edge of the viewport instead of relying on `onAppear`, which fires
         /// for prefetched rows and can race itself.
+        ///
+        /// Pages do not share a ratio, so a short last image can never reach
+        /// the top edge. A footer adds the overscroll that lets it be pushed
+        /// up, and the counter treats a fully visible last page as the end of
+        /// the chapter.
         private func verticalReader(_ viewModel: ReaderViewModel) -> some View {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
-                            CachedAsyncImage(
-                                url: page.imageURL,
-                                loader: dependencies.imageLoader,
-                                headers: page.headers,
-                                siteBaseURL: viewModel.manga.siteURL,
-                                contentMode: .fit,
-                                placeholderIcon: "photo",
-                                reloadID: reloadToken,
-                                reservedAspectRatio: Self.aspectRatio(for: page),
-                                onImageSize: { size in
-                                    Task {
-                                        await viewModel.recordPageSize(
-                                            index: index,
-                                            width: Int(size.width.rounded()),
-                                            height: Int(size.height.rounded())
+            GeometryReader { container in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(viewModel.pages.enumerated()), id: \.element.id) { index, page in
+                                CachedAsyncImage(
+                                    url: page.imageURL,
+                                    loader: dependencies.imageLoader,
+                                    headers: page.headers,
+                                    siteBaseURL: viewModel.manga.siteURL,
+                                    contentMode: .fit,
+                                    placeholderIcon: "photo",
+                                    reloadID: reloadToken,
+                                    reservedAspectRatio: Self.aspectRatio(for: page),
+                                    onImageSize: { size in
+                                        Task {
+                                            await viewModel.recordPageSize(
+                                                index: index,
+                                                width: Int(size.width.rounded()),
+                                                height: Int(size.height.rounded())
+                                            )
+                                        }
+                                    }
+                                )
+                                .frame(maxWidth: .infinity)
+                                .background {
+                                    GeometryReader { geometry in
+                                        let frame = geometry.frame(
+                                            in: .named(Self.scrollCoordinateSpace))
+                                        Color.clear.preference(
+                                            key: ReaderPageFrameKey.self,
+                                            value: [
+                                                index: ReaderRowFrame(
+                                                    minY: Double(frame.minY),
+                                                    maxY: Double(frame.maxY)
+                                                )
+                                            ]
                                         )
                                     }
                                 }
-                            )
-                            .frame(maxWidth: .infinity)
-                            .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: ReaderPageOffsetKey.self,
-                                        value: [
-                                            index: Double(
-                                                geometry.frame(in: .named(Self.scrollCoordinateSpace))
-                                                    .minY
-                                            )
-                                        ]
-                                    )
-                                }
                             }
+
+                            // Lets the last page scroll past the bottom edge, so
+                            // a short final image can be read without being
+                            // pinned to the bottom of the screen.
+                            Color.clear
+                                .frame(height: container.size.height * Self.endOverscrollFraction)
+                        }
+                        .onPreferenceChange(ReaderPageFrameKey.self) { frames in
+                            updateCurrentPage(
+                                from: frames,
+                                viewportHeight: container.size.height,
+                                viewModel: viewModel
+                            )
                         }
                     }
-                    .onPreferenceChange(ReaderPageOffsetKey.self) { offsets in
-                        updateCurrentPage(from: offsets, viewModel: viewModel)
+                    .coordinateSpace(name: Self.scrollCoordinateSpace)
+                    .scrollIndicators(.hidden)
+                    .id(viewModel.chapter.id)
+                    .onAppear { restoreScrollPosition(with: proxy, viewModel: viewModel) }
+                    .onChange(of: viewModel.pages.count) { _, _ in
+                        // The first `onAppear` runs while the page list is still
+                        // loading, so the restore also has to retry once it
+                        // arrives.
+                        restoreScrollPosition(with: proxy, viewModel: viewModel)
                     }
-                }
-                .coordinateSpace(name: Self.scrollCoordinateSpace)
-                .scrollIndicators(.hidden)
-                .id(viewModel.chapter.id)
-                .onAppear { restoreScrollPosition(with: proxy, viewModel: viewModel) }
-                .onChange(of: viewModel.pages.count) { _, _ in
-                    // The first `onAppear` runs while the page list is still
-                    // loading, so the restore also has to retry once it
-                    // arrives.
-                    restoreScrollPosition(with: proxy, viewModel: viewModel)
                 }
             }
         }
@@ -307,12 +329,26 @@
         }
 
         /// Tracks the page that covers the top edge of the vertical reader.
-        private func updateCurrentPage(from offsets: [Int: Double], viewModel: ReaderViewModel) {
+        private func updateCurrentPage(
+            from frames: [Int: ReaderRowFrame],
+            viewportHeight: CGFloat,
+            viewModel: ReaderViewModel
+        ) {
             // Ignore layout reports until the saved page has been restored:
             // the first layout always reports the top row and would otherwise
             // pull the reader back to the beginning.
-            guard didRestoreScroll else { return }
-            guard let index = ReaderViewModel.topmostPageIndex(minYs: offsets) else { return }
+            guard didRestoreScroll, viewportHeight > 0, !viewModel.pages.isEmpty else { return }
+
+            let lastIndex = viewModel.pages.count - 1
+            guard
+                let index = ReaderViewModel.currentPageIndex(
+                    minYs: frames.mapValues(\.minY),
+                    lastPageIndex: lastIndex,
+                    lastPageBottom: frames[lastIndex]?.maxY,
+                    viewportHeight: Double(viewportHeight)
+                )
+            else { return }
+
             guard index != viewModel.currentPageIndex else { return }
             Task { await viewModel.setPage(index: index) }
         }
@@ -581,12 +617,20 @@
         }
     }
 
-    /// Vertical offset of every realised reader row, in the scroll view's
-    /// coordinate space.
-    private struct ReaderPageOffsetKey: PreferenceKey {
-        static let defaultValue: [Int: Double] = [:]
+    /// Frame of a realised reader row, in the scroll view's coordinate space.
+    private struct ReaderRowFrame: Equatable {
+        let minY: Double
+        let maxY: Double
+    }
 
-        static func reduce(value: inout [Int: Double], nextValue: () -> [Int: Double]) {
+    /// Vertical extent of every realised reader row.
+    private struct ReaderPageFrameKey: PreferenceKey {
+        static let defaultValue: [Int: ReaderRowFrame] = [:]
+
+        static func reduce(
+            value: inout [Int: ReaderRowFrame],
+            nextValue: () -> [Int: ReaderRowFrame]
+        ) {
             value.merge(nextValue(), uniquingKeysWith: { _, new in new })
         }
     }

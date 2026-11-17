@@ -198,6 +198,66 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertNil(ReaderViewModel.topmostPageIndex(minYs: [:]))
     }
 
+    func testTopmostPageIndexAbsorbsFractionalOffsets() {
+        // At the end of the list a row can sit a hair below the top edge.
+        let offsets: [Int: Double] = [0: -900, 1: 0.4]
+
+        XCTAssertEqual(ReaderViewModel.topmostPageIndex(minYs: offsets), 1)
+    }
+
+    func testCurrentPageBecomesTheLastPageWhenItIsFullyVisible() {
+        // A short last image never reaches the top edge, so covering the top
+        // would leave the chapter unfinished forever.
+        let offsets: [Int: Double] = [0: -1800, 1: -400, 2: 320]
+
+        let index = ReaderViewModel.currentPageIndex(
+            minYs: offsets,
+            lastPageIndex: 2,
+            lastPageBottom: 600,
+            viewportHeight: 800
+        )
+
+        XCTAssertEqual(index, 2)
+    }
+
+    func testCurrentPageStaysOnTheTopRowWhileTheLastPageIsBelowTheFold() {
+        let offsets: [Int: Double] = [0: -1800, 1: -400, 2: 320]
+
+        let index = ReaderViewModel.currentPageIndex(
+            minYs: offsets,
+            lastPageIndex: 2,
+            lastPageBottom: 1200,
+            viewportHeight: 800
+        )
+
+        XCTAssertEqual(index, 1)
+    }
+
+    func testCurrentPageIgnoresAnUnrealisedLastPage() {
+        // The lazy stack has not built the last row yet.
+        let offsets: [Int: Double] = [0: -100, 1: 700]
+
+        let index = ReaderViewModel.currentPageIndex(
+            minYs: offsets,
+            lastPageIndex: 9,
+            lastPageBottom: nil,
+            viewportHeight: 800
+        )
+
+        XCTAssertEqual(index, 0)
+    }
+
+    func testCurrentPageIsNilWithoutRows() {
+        XCTAssertNil(
+            ReaderViewModel.currentPageIndex(
+                minYs: [:],
+                lastPageIndex: 0,
+                lastPageBottom: nil,
+                viewportHeight: 800
+            )
+        )
+    }
+
     func testStartPositionBeginningIgnoresSavedProgress() async {
         let manga = MangaEntity(id: "manga", title: "Lorem")
         let chapter = ChapterEntity(id: "chapter", pageCount: 3)
