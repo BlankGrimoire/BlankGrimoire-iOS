@@ -271,7 +271,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
                     genreValue: genreValue
                 )
             }
-            let html = try await fetchHTML(searchURL, session: session, profile: profile)
+            let html = try await fetchHTML(searchURL, session: session)
             let context = PluginPageContext(
                 html: html,
                 baseURL: searchURL.absoluteString,
@@ -526,7 +526,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(result.key)
         }
-        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
+        let html = try await fetchHTML(detailsURL, session: session)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -558,7 +558,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(result.key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(result.key)
         }
-        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
+        let html = try await fetchHTML(detailsURL, session: session)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -593,7 +593,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         guard let detailsURL = AdapterSession.absoluteURL(key, baseURL: profile.baseURL) else {
             throw SiteBrowsingError.invalidSiteURL(key)
         }
-        let html = try await fetchHTML(detailsURL, session: session, profile: profile)
+        let html = try await fetchHTML(detailsURL, session: session)
         let context = PluginPageContext(
             html: html,
             baseURL: detailsURL.absoluteString,
@@ -706,10 +706,12 @@ public final class SiteCatalogService: SiteCatalogProviding {
 
     // MARK: - Networking
 
-    private func fetchHTML(_ url: URL, session: AdapterSession, profile: SiteProfile) async throws -> String {
+    private func fetchHTML(_ url: URL, session: AdapterSession) async throws -> String {
         do {
+            // Use the session profile: it carries the adapter-declared
+            // WebView mode and network hosts that the stored profile may lack.
             let response = try await session.bridge.hybridRequest(
-                HttpRequest(url: url.absoluteString), siteProfile: profile)
+                HttpRequest(url: url.absoluteString), siteProfile: session.profile)
             if SiteChallengeDetector.isChallenge(status: response.status, body: response.body) {
                 throw SiteBrowsingError.challengeRequired(url)
             }
@@ -751,7 +753,7 @@ public final class SiteCatalogService: SiteCatalogProviding {
         )
 
         let genresURL = try makeGenresURL(profile: profile, bundle: session.bundle)
-        let html = try await self.fetchHTML(genresURL, session: session, profile: profile)
+        let html = try await self.fetchHTML(genresURL, session: session)
 
         let context = PluginPageContext(
             html: html,

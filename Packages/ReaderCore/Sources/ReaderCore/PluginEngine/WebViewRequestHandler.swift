@@ -244,10 +244,11 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
             let currentURL = webView.url?.absoluteString ?? url.absoluteString
 
             // Check if we still have a challenge. Cloudflare often swaps the
-            // challenge page for the real one a moment after `didFinish`, so
-            // poll briefly before giving up and asking the user.
+            // challenge page for the real one a while after `didFinish`, so
+            // poll like the visible verification browser (20 seconds) before
+            // giving up and asking the user.
             if SiteChallengeDetector.isChallenge(status: 200, body: html) {
-                if challengePolls < 10 {
+                if challengePolls < 40 {
                     challengePolls += 1
                     try? await Task.sleep(for: .milliseconds(500))
                     await extractHTML()
@@ -262,6 +263,12 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
                 return
             }
 
+            // Persist the cookies the challenge just set before the web view
+            // goes away. `cookiesDidChange` is asynchronous and can race with
+            // cleanup; without the clearance cookie the next native request
+            // would start the challenge again and force the manual browser.
+            await persistCookies(from: webView)
+
             hasCompleted = true
             cleanup()
 
@@ -275,6 +282,21 @@ private final class WebViewPageLoader: NSObject, WKNavigationDelegate, WKHTTPCoo
 
         } catch {
             handleError(error)
+        }
+    }
+
+    /// Copies the web view cookies that belong to the site into the shared
+    /// challenge store, so native requests continue the verified session.
+    private func persistCookies(from webView: WKWebView) async {
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+            store.getAllCookies { cookies in
+                continuation.resume(returning: cookies)
+            }
+        }
+
+        for cookie in cookies where isAllowedHost(cookie.domain) {
+            ChallengeCookieStore.shared.store([cookie], forHost: cookie.domain)
         }
     }
 

@@ -163,16 +163,18 @@ struct AdapterSession {
             throw AdapterSessionError.unsupportedAPIVersion(found: bundle.manifest.apiVersion)
         }
 
-        let bridge = bridgeFactory(
-            profile.withAdapterNetworkHosts(
+        let sessionProfile =
+            profile
+            .withAdapterNetworkHosts(
                 bundle.manifest.networkHosts.isEmpty
                     ? bundle.themeAdapter.networkHosts
                     : bundle.manifest.networkHosts
             )
-        )
+            .withAdapterWebViewMode(bundle.themeAdapter.detectionSignature.usesWebViewMode)
+        let bridge = bridgeFactory(sessionProfile)
         do {
             let runtime = try runtimeFactory(bundle, bridge)
-            return AdapterSession(profile: profile, bundle: bundle, bridge: bridge, runtime: runtime)
+            return AdapterSession(profile: sessionProfile, bundle: bundle, bridge: bridge, runtime: runtime)
         } catch {
             bridge.dispose()
             throw error

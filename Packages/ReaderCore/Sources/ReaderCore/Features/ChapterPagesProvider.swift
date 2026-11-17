@@ -89,7 +89,7 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
         let response: HttpResponse
         do {
             response = try await session.bridge.hybridRequest(
-                HttpRequest(url: chapterURL.absoluteString), siteProfile: profile)
+                HttpRequest(url: chapterURL.absoluteString), siteProfile: session.profile)
             guard (200...299).contains(response.status) else {
                 throw SiteBrowsingError.chapterFetchFailed(response.status)
             }

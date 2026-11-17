@@ -59,6 +59,50 @@ final class AdapterSessionPoolTests: XCTestCase {
         second.release()
     }
 
+    func testAdapterWebViewModeAppliesToStoredProfile() async throws {
+        // Profiles restored from storage do not persist the flag, so the
+        // session must adopt the adapter declaration or every challenged page
+        // would surface an error instead of the hidden verification pass.
+        let counter = RuntimeCounter()
+        let store = TestAdapterStore(
+            bundles: [
+                makeBundle(
+                    themeID: "theme.a",
+                    searchPath: "/search",
+                    usesWebViewMode: true
+                )
+            ]
+        )
+        let pool = AdapterSessionPool()
+        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        XCTAssertFalse(profile.usesWebViewMode)
+
+        let lease = try await acquire(pool: pool, profile: profile, store: store, counter: counter)
+
+        XCTAssertTrue(lease.session.profile.usesWebViewMode)
+        lease.release()
+    }
+
+    func testAdapterWebViewModeClearsAStaleValue() async throws {
+        // A profile created while another adapter was selected can still carry
+        // `true`. The manifest is authoritative, so switching to an adapter
+        // that does not need the hidden pass clears the stale flag.
+        let counter = RuntimeCounter()
+        let store = TestAdapterStore(
+            bundles: [
+                makeBundle(themeID: "theme.a", searchPath: "/search", usesWebViewMode: false)
+            ]
+        )
+        let pool = AdapterSessionPool()
+        var profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
+        profile.usesWebViewMode = true
+
+        let lease = try await acquire(pool: pool, profile: profile, store: store, counter: counter)
+
+        XCTAssertFalse(lease.session.profile.usesWebViewMode)
+        lease.release()
+    }
+
     func testUninstalledAdapterDropsTheCachedSession() async throws {
         let counter = RuntimeCounter()
         let store = TestAdapterStore(bundles: [makeBundle(themeID: "theme.a", searchPath: "/search")])

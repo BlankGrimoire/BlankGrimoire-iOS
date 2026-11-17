@@ -125,6 +125,21 @@ public struct SiteProfile: Codable, Sendable, Equatable, Identifiable {
         return copy
     }
 
+    /// Returns a copy that honours an adapter-declared WebView mode.
+    ///
+    /// The flag lives in the adapter manifest, not in the stored profile: a
+    /// profile saved before the adapter declared it (or restored from storage
+    /// that does not persist the field) would otherwise skip the hidden
+    /// verification pass and surface a challenge error to the user. The
+    /// manifest is authoritative in both directions, so switching to an
+    /// adapter that does not need the hidden pass clears a stale value.
+    public func withAdapterWebViewMode(_ enabled: Bool) -> SiteProfile {
+        guard usesWebViewMode != enabled else { return self }
+        var copy = self
+        copy.usesWebViewMode = enabled
+        return copy
+    }
+
     /// Expands adapter host templates for `baseURL`.
     ///
     /// A template contains exactly one `{host}` placeholder and no scheme,
