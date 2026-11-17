@@ -4,6 +4,14 @@
     import Foundation
     import SwiftUI
 
+    /// Verification sheet route for a search result preview.
+    private struct ChallengeRoute: Identifiable {
+        let url: URL
+        let allowedHosts: Set<String>
+
+        var id: String { url.absoluteString }
+    }
+
     /// Read-only preview of a search hit that is not in the library yet.
     ///
     /// The adapter's `getDetails` and `getChapters` output is fetched without
@@ -20,6 +28,7 @@
         @State private var isImporting = false
         @State private var isImported: Bool
         @State private var lastError: Error?
+        @State private var challengeRoute: ChallengeRoute?
 
         init(
             result: SiteSearchResult,
@@ -72,10 +81,32 @@
                 }
             }
             .task { await load() }
+            .onChange(of: challengeURL) { _, url in
+                guard let url else { return }
+                // Prefer the site the result belongs to; fall back to the
+                // challenge URL itself so a profile without a parsable URL
+                // still gets the verification sheet instead of a silent error.
+                let host =
+                    URL(string: result.siteURL)?.host?.lowercased()
+                    ?? url.host?.lowercased()
+                guard let host else { return }
+                challengeRoute = ChallengeRoute(url: url, allowedHosts: [host])
+            }
+            .sheet(item: $challengeRoute) { route in
+                ChallengeView(
+                    url: route.url,
+                    allowedHosts: route.allowedHosts,
+                    onFinish: { outcome in
+                        challengeRoute = nil
+                        guard outcome == .completed else { return }
+                        Task { await load() }
+                    }
+                )
+            }
             .alert(
                 "Error",
                 isPresented: Binding(
-                    get: { lastError != nil },
+                    get: { lastError != nil && challengeURL == nil },
                     set: { isPresented in
                         if !isPresented {
                             lastError = nil
@@ -89,6 +120,16 @@
             } message: {
                 Text(lastError?.localizedDescription ?? "")
             }
+        }
+
+        /// URL the visible verification browser must open, when the site asked
+        /// for a challenge the hidden pass could not resolve.
+        private var challengeURL: URL? {
+            guard let error = lastError as? SiteBrowsingError else { return nil }
+            if case .challengeRequired(let url) = error {
+                return url
+            }
+            return nil
         }
 
         // MARK: - Sections
@@ -310,6 +351,7 @@
             }
 
             isLoading = true
+            lastError = nil
             defer { isLoading = false }
 
             do {
