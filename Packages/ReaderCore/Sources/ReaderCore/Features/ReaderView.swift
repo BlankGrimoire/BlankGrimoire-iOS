@@ -599,35 +599,51 @@
 
         @Environment(\.dismiss) private var dismiss
 
+        /// Height that shows at most five chapters, so the picker stays a
+        /// small popup instead of taking over the screen.
+        private var detentHeight: CGFloat {
+            let visibleRows = min(max(chapters.count, 1), 5)
+            return CGFloat(visibleRows) * 52 + 96
+        }
+
         var body: some View {
             NavigationStack {
-                List(chapters) { chapter in
-                    Button {
-                        onSelect(chapter)
-                    } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(chapter.title ?? Self.label(for: chapter))
-                                    .foregroundStyle(.primary)
-                                if chapter.title != nil, let number = chapter.number,
-                                    chapter.title != Self.label(for: number)
-                                {
-                                    Text(Self.label(for: number))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                ScrollViewReader { proxy in
+                    List(chapters) { chapter in
+                        Button {
+                            onSelect(chapter)
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(chapter.title ?? Self.label(for: chapter))
+                                        .foregroundStyle(.primary)
+                                    if chapter.title != nil, let number = chapter.number,
+                                        chapter.title != Self.label(for: number)
+                                    {
+                                        Text(Self.label(for: number))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
+                                Spacer(minLength: 0)
+
+                                if chapter.id == currentChapter.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
                                 }
                             }
-
-                            Spacer(minLength: 0)
-
-                            if chapter.id == currentChapter.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.tint)
-                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .listStyle(.plain)
+                    .task {
+                        // Open on the current chapter instead of the top of the
+                        // list: jumping backwards is the common case.
+                        await Task.yield()
+                        proxy.scrollTo(currentChapter.id, anchor: .center)
+                    }
                 }
                 .navigationTitle("Chapters")
                 .navigationBarTitleDisplayMode(.inline)
@@ -637,6 +653,8 @@
                     }
                 }
             }
+            .presentationDetents([.height(detentHeight)])
+            .presentationDragIndicator(.visible)
         }
 
         private static func label(for chapter: ChapterEntity) -> String {
