@@ -35,6 +35,7 @@ extension MangaDetails {
             genres: genres ?? [],
             status: status,
             contentRating: contentRating,
+            kind: contentKind ?? .comic,
             isFavorite: isFavorite
         )
     }
@@ -51,6 +52,11 @@ extension MangaDetails {
         entity.genres = genres ?? []
         entity.status = status
         entity.contentRating = contentRating
+        // A missing kind means the adapter does not declare one: keep whatever
+        // the series already had instead of downgrading a text series.
+        if let contentKind {
+            entity.kind = contentKind
+        }
         entity.updatedAt = Date()
     }
 }

@@ -93,10 +93,10 @@ public enum ContentRating: String, Codable, Sendable {
 /// Raw values are persisted by SwiftData: add cases, never rename them
 /// without a migration stage.
 public enum ContentKind: String, Codable, Sendable, CaseIterable {
-    /// Image pages, one row per page.
-    case comic
-    /// Prose in HTML, read chapter by chapter.
-    case novel
+    /// Image pages, one row per page. Wire value: `image`.
+    case comic = "image"
+    /// Prose in HTML, read chapter by chapter. Wire value: `text`.
+    case novel = "text"
 
     /// Whether chapters carry text instead of image pages.
     public var isText: Bool {
@@ -122,11 +122,13 @@ public enum TextFormat: String, Codable, Sendable, CaseIterable {
     /// Chapter body is HTML produced by the adapter.
     case html
     /// Chapter body is plain text.
-    case plain
+    case text
 
+    /// Matches the adapter contract, which calls the plain variant `text`.
+    /// `plain` is accepted for values written by earlier development builds.
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = TextFormat(rawValue: raw) ?? .html
+        self = TextFormat(rawValue: raw) ?? (raw == "plain" ? .text : .html)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -135,8 +137,44 @@ public enum TextFormat: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// Body of a text chapter, as returned by the adapter.
+public struct ChapterText: Codable, Sendable, Equatable {
+    public let kind: TextFormat
+    public let value: String
+
+    public init(kind: TextFormat, value: String) {
+        self.kind = kind
+        self.value = value
+    }
+}
+
+/// Payload of the adapter's `content` method for a text chapter.
+///
+/// The body is untrusted markup: sanitise it before rendering.
+public struct ChapterContent: Codable, Sendable, Equatable {
+    public let key: String
+    public let title: String?
+    public let body: ChapterText
+    public let language: String?
+    public let attribution: Attribution?
+
+    public init(
+        key: String,
+        title: String? = nil,
+        body: ChapterText,
+        language: String? = nil,
+        attribution: Attribution? = nil
+    ) {
+        self.key = key
+        self.title = title
+        self.body = body
+        self.language = language
+        self.attribution = attribution
+    }
+}
+
 /// Site attribution
-public struct Attribution: Codable, Sendable {
+public struct Attribution: Codable, Sendable, Equatable {
     public let siteName: String
     public let siteURL: URLString
     public let logoURL: URLString?
@@ -222,6 +260,8 @@ public struct MangaDetails: Codable, Sendable, Identifiable {
     public let genres: [String]?
     public let status: MangaStatus
     public let contentRating: ContentRating
+    /// `nil` means the series is image-based, matching the adapter contract.
+    public let contentKind: ContentKind?
     public let attribution: Attribution?
 
     public var id: String { key }
@@ -238,6 +278,7 @@ public struct MangaDetails: Codable, Sendable, Identifiable {
         genres: [String]? = nil,
         status: MangaStatus,
         contentRating: ContentRating,
+        contentKind: ContentKind? = nil,
         attribution: Attribution? = nil
     ) {
         self.key = key
@@ -251,6 +292,7 @@ public struct MangaDetails: Codable, Sendable, Identifiable {
         self.genres = genres
         self.status = status
         self.contentRating = contentRating
+        self.contentKind = contentKind
         self.attribution = attribution
     }
 }
@@ -1054,11 +1096,14 @@ public struct AdapterManifest: Codable, Sendable {
     public let referrerHeaders: [String: String]
     /// Host templates for adapter hooks, relative to the site host.
     public let networkHosts: [String]
+    /// Content kinds the adapter can produce. Empty means image-only.
+    public let contentKinds: [ContentKind]
 
     public init(
         id: String, name: String, version: String, apiVersion: Int, detectionSignature: ThemeSignature, sha256: String,
         referrerHeaders: [String: String] = [:],
-        networkHosts: [String] = []
+        networkHosts: [String] = [],
+        contentKinds: [ContentKind] = []
     ) {
         self.id = id
         self.name = name
@@ -1068,10 +1113,12 @@ public struct AdapterManifest: Codable, Sendable {
         self.sha256 = sha256
         self.referrerHeaders = referrerHeaders
         self.networkHosts = networkHosts
+        self.contentKinds = contentKinds
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, version, apiVersion, detectionSignature, sha256, referrerHeaders, networkHosts
+        case id, name, version, apiVersion, detectionSignature, sha256, referrerHeaders, networkHosts,
+            contentKinds
     }
 
     public init(from decoder: Decoder) throws {
@@ -1085,6 +1132,7 @@ public struct AdapterManifest: Codable, Sendable {
         sha256 = try container.decode(String.self, forKey: .sha256)
         referrerHeaders = try container.decodeIfPresent([String: String].self, forKey: .referrerHeaders) ?? [:]
         networkHosts = try container.decodeIfPresent([String].self, forKey: .networkHosts) ?? []
+        contentKinds = try container.decodeIfPresent([ContentKind].self, forKey: .contentKinds) ?? []
 
         guard apiVersion == ContractVersion.current else {
             throw DecodingError.dataCorruptedError(

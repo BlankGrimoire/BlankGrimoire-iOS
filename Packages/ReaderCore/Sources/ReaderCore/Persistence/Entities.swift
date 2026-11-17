@@ -171,8 +171,6 @@ public final class MangaEntity {
     /// `1.0`, while opening a chapter starts at that chapter's position in the
     /// series instead of showing the chapter as a fraction of the whole series.
     public func updateReadingPosition(chapterId: String, pageIndex: Int, totalPages: Int) {
-        self.lastReadAt = Date()
-        self.lastReadChapterId = chapterId
         self.lastReadPageIndex = pageIndex
 
         let chapterFraction: Double
@@ -181,14 +179,27 @@ public final class MangaEntity {
         } else {
             chapterFraction = 0
         }
+        updateReadingPosition(chapterId: chapterId, chapterFraction: chapterFraction)
+    }
 
+    /// Updates the position from a chapter fraction.
+    ///
+    /// Text chapters have no pages to index, so their reader reports how much
+    /// of the body was read instead. The series-level progress stays
+    /// chapter-based: completed chapters count as whole units and the current
+    /// one adds its own fraction.
+    public func updateReadingPosition(chapterId: String, chapterFraction: Double) {
+        self.lastReadAt = Date()
+        self.lastReadChapterId = chapterId
+
+        let fraction = min(max(chapterFraction, 0), 1)
         let ordered = chaptersInReadingOrder
         if !ordered.isEmpty,
             let index = ordered.firstIndex(where: { $0.id == chapterId })
         {
-            self.readingProgress = (Double(index) + chapterFraction) / Double(ordered.count)
+            self.readingProgress = (Double(index) + fraction) / Double(ordered.count)
         } else {
-            self.readingProgress = chapterFraction
+            self.readingProgress = fraction
         }
         self.updatedAt = Date()
     }
@@ -455,6 +466,8 @@ public final class ChapterContentEntity {
     /// Serialized `TextFormat` raw value.
     public var formatRaw: String
     public var wordCount: Int
+    /// Length of `body` in characters, used for the chapter percentage.
+    public var characterCount: Int
     public var fetchedAt: Date
     public var updatedAt: Date
 
@@ -472,6 +485,7 @@ public final class ChapterContentEntity {
         self.body = body
         self.formatRaw = format.rawValue
         self.wordCount = wordCount
+        self.characterCount = body.count
         self.fetchedAt = Date()
         self.updatedAt = Date()
         self.chapter = chapter
@@ -480,6 +494,15 @@ public final class ChapterContentEntity {
     public var format: TextFormat {
         get { TextFormat(rawValue: formatRaw) ?? .html }
         set { formatRaw = newValue.rawValue }
+    }
+
+    /// How much of the body has been read for a character offset.
+    ///
+    /// This is the chapter percentage for prose: pages are a rendering
+    /// artifact, characters are not. An empty body reports zero.
+    public func fraction(forOffset offset: Int) -> Double {
+        guard characterCount > 0 else { return 0 }
+        return min(max(Double(offset) / Double(characterCount), 0), 1)
     }
 }
 

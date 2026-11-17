@@ -112,6 +112,58 @@ final class SchemaEvolutionTests: XCTestCase {
         XCTAssertNotNil(bookmark.updatedAt)
     }
 
+    // MARK: - Chapter percentage
+
+    func testChapterFractionUsesCharacters() {
+        let content = ChapterContentEntity(body: "0123456789", format: .text)
+
+        XCTAssertEqual(content.characterCount, 10)
+        XCTAssertEqual(content.fraction(forOffset: 0), 0, accuracy: 0.0001)
+        XCTAssertEqual(content.fraction(forOffset: 5), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(content.fraction(forOffset: 10), 1, accuracy: 0.0001)
+        XCTAssertEqual(content.fraction(forOffset: 40), 1, accuracy: 0.0001)
+        XCTAssertEqual(content.fraction(forOffset: -3), 0, accuracy: 0.0001)
+    }
+
+    func testEmptyBodyHasNoFraction() {
+        let content = ChapterContentEntity(body: "", format: .text)
+
+        XCTAssertEqual(content.fraction(forOffset: 5), 0)
+    }
+
+    func testSeriesProgressStaysChapterBasedForText() {
+        let manga = MangaEntity(id: "manga", title: "Series", kind: .novel)
+        let first = ChapterEntity(id: "c-1", number: 1)
+        let second = ChapterEntity(id: "c-2", number: 2)
+        first.manga = manga
+        second.manga = manga
+        manga.chapters = [first, second]
+
+        // Half of the first of two chapters.
+        manga.updateReadingPosition(chapterId: "c-1", chapterFraction: 0.5)
+        XCTAssertEqual(manga.readingProgress, 0.25, accuracy: 0.0001)
+
+        // End of the last chapter completes the work.
+        manga.updateReadingPosition(chapterId: "c-2", chapterFraction: 1)
+        XCTAssertEqual(manga.readingProgress, 1, accuracy: 0.0001)
+        XCTAssertEqual(manga.lastReadChapterId, "c-2")
+    }
+
+    func testPageBasedProgressStillDelegatesToTheFraction() {
+        let manga = MangaEntity(id: "manga", title: "Series")
+        let first = ChapterEntity(id: "c-1", number: 1)
+        let second = ChapterEntity(id: "c-2", number: 2)
+        first.manga = manga
+        second.manga = manga
+        manga.chapters = [first, second]
+
+        // Page 2 of 2 is the whole chapter.
+        manga.updateReadingPosition(chapterId: "c-1", pageIndex: 1, totalPages: 2)
+
+        XCTAssertEqual(manga.readingProgress, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(manga.lastReadPageIndex, 1)
+    }
+
     // MARK: - Sync tombstones
 
     func testTombstoneIdentityIsKindScoped() {
