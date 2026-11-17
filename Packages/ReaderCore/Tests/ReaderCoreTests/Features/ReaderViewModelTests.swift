@@ -258,6 +258,179 @@ final class ReaderViewModelTests: XCTestCase {
         )
     }
 
+    func testPositionPersistsTheInPageOffset() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progressRepository = TestReadingProgressRepository()
+        let (positionStore, suite) = makePositionStore()
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: [
+                PageEntity(index: 0, imageURL: "https://example.org/one.jpg"),
+                PageEntity(index: 1, imageURL: "https://example.org/two.jpg"),
+                PageEntity(index: 2, imageURL: "https://example.org/three.jpg"),
+            ]),
+            readingProgressRepository: progressRepository,
+            mangaRepository: TestMangaRepository(manga: manga),
+            positionStore: positionStore
+        )
+        await viewModel.load()
+
+        await viewModel.setPosition(index: 1, fraction: 0.42)
+        await viewModel.flushProgress()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 1)
+        XCTAssertEqual(viewModel.currentPageOffset, 0.42, accuracy: 0.001)
+        XCTAssertEqual(progressRepository.progress.first?.pageIndex, 1)
+        let saved = ReadingPositionStore(defaults: UserDefaults(suiteName: suite)!)
+            .position(mangaID: manga.id, chapterID: chapter.id)
+        XCTAssertEqual(saved?.pageIndex, 1)
+        XCTAssertEqual(saved?.offset ?? 0, 0.42, accuracy: 0.001)
+    }
+
+    func testLoadRestoresTheInPageOffset() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progress = ReadingProgressEntity(
+            pageIndex: 1,
+            totalPages: 3,
+            manga: manga,
+            chapter: chapter
+        )
+        let (positionStore, _) = makePositionStore()
+        positionStore.setPosition(
+            pageIndex: 1,
+            offset: 0.75,
+            mangaID: manga.id,
+            chapterID: chapter.id
+        )
+        let pages = (0..<3).map {
+            PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg")
+        }
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
+            mangaRepository: TestMangaRepository(manga: manga),
+            positionStore: positionStore
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 1)
+        XCTAssertEqual(viewModel.currentPageOffset, 0.75, accuracy: 0.001)
+    }
+
+    func testOffsetFromAnotherPageIsIgnored() async {
+        // The stored offset belongs to the page the reader was on; applying it
+        // to a different page would drop the reader in the wrong place.
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progress = ReadingProgressEntity(
+            pageIndex: 2,
+            totalPages: 3,
+            manga: manga,
+            chapter: chapter
+        )
+        let (positionStore, _) = makePositionStore()
+        positionStore.setPosition(
+            pageIndex: 0,
+            offset: 0.9,
+            mangaID: manga.id,
+            chapterID: chapter.id
+        )
+        let pages = (0..<3).map {
+            PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg")
+        }
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
+            mangaRepository: TestMangaRepository(manga: manga),
+            positionStore: positionStore
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 2)
+        XCTAssertEqual(viewModel.currentPageOffset, 0, accuracy: 0.001)
+    }
+
+    func testSwitchingPageClearsTheInPageOffset() async {
+        // Horizontal paging shows whole pages, so an offset from the vertical
+        // reader must not leak into the saved progress.
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progress = ReadingProgressEntity(
+            pageIndex: 1,
+            totalPages: 3,
+            manga: manga,
+            chapter: chapter
+        )
+        let (positionStore, _) = makePositionStore()
+        positionStore.setPosition(
+            pageIndex: 1,
+            offset: 0.6,
+            mangaID: manga.id,
+            chapterID: chapter.id
+        )
+        let pages = (0..<3).map {
+            PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg")
+        }
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
+            mangaRepository: TestMangaRepository(manga: manga),
+            positionStore: positionStore
+        )
+        await viewModel.load()
+
+        await viewModel.setPage(index: 2)
+
+        XCTAssertEqual(viewModel.currentPageIndex, 2)
+        XCTAssertEqual(viewModel.currentPageOffset, 0, accuracy: 0.001)
+    }
+
+    func testScrollAnchorReachesTheMiddleOfALongStrip() {
+        // A 3000pt page in an 800pt viewport can shift by 2200pt: half of it
+        // needs an anchor of 0.5 * 3000 / 2200.
+        let anchor = ReaderViewModel.scrollAnchor(for: 0.5, pageHeight: 3000, viewport: 800)
+
+        XCTAssertEqual(anchor, 0.5 * 3000 / 2200, accuracy: 0.0001)
+    }
+
+    func testScrollAnchorClampsAtTheBottomOfThePage() {
+        // Asking for 90% of a page taller than the viewport exceeds what the
+        // scroll view can do; the bottom of the row is the furthest point.
+        let anchor = ReaderViewModel.scrollAnchor(for: 0.9, pageHeight: 3000, viewport: 800)
+
+        XCTAssertEqual(anchor, 1)
+    }
+
+    func testScrollAnchorIsZeroWhenThePageFits() {
+        XCTAssertEqual(ReaderViewModel.scrollAnchor(for: 0.8, pageHeight: 500, viewport: 800), 0)
+    }
+
+    func testScrollAnchorIgnoresMissingValues() {
+        XCTAssertEqual(ReaderViewModel.scrollAnchor(for: 0, pageHeight: 3000, viewport: 800), 0)
+        XCTAssertEqual(ReaderViewModel.scrollAnchor(for: 0.5, pageHeight: 3000, viewport: 0), 0)
+    }
+
+    /// Isolated defaults so tests never touch the app's stored positions.
+    private func makePositionStore() -> (ReadingPositionStore, String) {
+        let suite = "ReaderCoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite) ?? .standard
+        addTeardownBlock {
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        }
+        return (ReadingPositionStore(defaults: defaults), suite)
+    }
+
     func testStartPositionBeginningIgnoresSavedProgress() async {
         let manga = MangaEntity(id: "manga", title: "Lorem")
         let chapter = ChapterEntity(id: "chapter", pageCount: 3)

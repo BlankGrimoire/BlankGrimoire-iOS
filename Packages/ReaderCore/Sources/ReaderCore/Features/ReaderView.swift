@@ -272,12 +272,22 @@
                     .coordinateSpace(name: Self.scrollCoordinateSpace)
                     .scrollIndicators(.hidden)
                     .id(viewModel.chapter.id)
-                    .onAppear { restoreScrollPosition(with: proxy, viewModel: viewModel) }
+                    .onAppear {
+                        restoreScrollPosition(
+                            with: proxy,
+                            viewport: container.size,
+                            viewModel: viewModel
+                        )
+                    }
                     .onChange(of: viewModel.pages.count) { _, _ in
                         // The first `onAppear` runs while the page list is still
                         // loading, so the restore also has to retry once it
                         // arrives.
-                        restoreScrollPosition(with: proxy, viewModel: viewModel)
+                        restoreScrollPosition(
+                            with: proxy,
+                            viewport: container.size,
+                            viewModel: viewModel
+                        )
                     }
                 }
             }
@@ -349,32 +359,72 @@
                 )
             else { return }
 
-            guard index != viewModel.currentPageIndex else { return }
-            Task { await viewModel.setPage(index: index) }
+            let fraction = Self.pageOffset(for: frames[index])
+
+            guard
+                index != viewModel.currentPageIndex
+                    || abs(fraction - viewModel.currentPageOffset) > 0.001
+            else { return }
+            Task { await viewModel.setPosition(index: index, fraction: fraction) }
+        }
+
+        /// How far the page has scrolled past the top edge, from 0 to 1.
+        private static func pageOffset(for frame: ReaderRowFrame?) -> Double {
+            guard let frame else { return 0 }
+            let height = frame.maxY - frame.minY
+            guard height > 0 else { return 0 }
+            return min(max(-frame.minY / height, 0), 1)
         }
 
         /// Moves the vertical reader to the saved page after the first layout.
-        private func restoreScrollPosition(with proxy: ScrollViewProxy, viewModel: ReaderViewModel) {
+        ///
+        /// A page can be taller than the screen, so restoring its top would
+        /// lose the place inside a long strip. Scrolling to the page with a
+        /// fractional anchor moves to the same point inside the row:
+        /// aligning both views at `fraction` shifts the content by
+        /// `fraction * (rowHeight - viewportHeight)`.
+        private func restoreScrollPosition(
+            with proxy: ScrollViewProxy,
+            viewport: CGSize,
+            viewModel: ReaderViewModel
+        ) {
             guard !didRestoreScroll else { return }
             // Pages load asynchronously: wait for the list instead of marking
             // the restore as done against an empty stack.
             guard !viewModel.pages.isEmpty else { return }
 
             let index = viewModel.currentPageIndex
-            guard index > 0, viewModel.pages.indices.contains(index) else {
+            guard viewModel.pages.indices.contains(index) else {
                 didRestoreScroll = true
                 return
             }
+
             let pageID = viewModel.pages[index].id
+            let anchorY = ReaderViewModel.scrollAnchor(
+                for: viewModel.currentPageOffset,
+                pageHeight: Double(estimatedHeight(of: viewModel.pages[index], viewport: viewport)),
+                viewport: Double(viewport.height)
+            )
+
+            guard anchorY > 0.001 || index > 0 else {
+                didRestoreScroll = true
+                return
+            }
 
             Task { @MainActor in
                 // Let the lazy stack build its first rows before jumping to a
                 // page that may be far down the chapter.
                 await Task.yield()
-                proxy.scrollTo(pageID, anchor: .top)
+                proxy.scrollTo(pageID, anchor: UnitPoint(x: 0, y: anchorY))
                 await Task.yield()
                 didRestoreScroll = true
             }
+        }
+
+        /// Height a page row occupies at the current viewport width.
+        private func estimatedHeight(of page: PageEntity, viewport: CGSize) -> CGFloat {
+            guard viewport.width > 0 else { return 0 }
+            return viewport.width / Self.aspectRatio(for: page)
         }
 
         // MARK: - Chrome
