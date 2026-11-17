@@ -21,6 +21,11 @@ public final class MangaEntity {
     public var lastReadAt: Date?
     public var lastReadChapterId: String?
     public var lastReadPageIndex: Int?
+    /// Newest chapter the user had seen when they last opened the series.
+    ///
+    /// Chapters added after this point are "new": they drive the badge in the
+    /// library without relying on push notifications.
+    public var lastSeenChapterId: String?
     public var readingProgress: Double
     public var createdAt: Date
     public var updatedAt: Date
@@ -79,6 +84,7 @@ public final class MangaEntity {
         self.lastReadAt = nil
         self.lastReadChapterId = nil
         self.lastReadPageIndex = nil
+        self.lastSeenChapterId = nil
         self.readingProgress = 0.0
         self.createdAt = Date()
         self.updatedAt = Date()
@@ -132,6 +138,25 @@ public final class MangaEntity {
 
     public func updateLastRead(chapterId: String, pageIndex: Int, totalPages: Int) {
         updateReadingPosition(chapterId: chapterId, pageIndex: pageIndex, totalPages: totalPages)
+    }
+
+    /// Chapters the site added after the user last looked at the list.
+    ///
+    /// Reading order is numeric, so new chapters land after the newest one
+    /// the user saw. A marker that no longer exists (the chapter was removed
+    /// upstream) reports zero instead of guessing.
+    public var newChapterCount: Int {
+        let ordered = chaptersInReadingOrder
+        guard let lastSeenChapterId,
+            let index = ordered.firstIndex(where: { $0.id == lastSeenChapterId })
+        else { return 0 }
+        return max(0, ordered.count - index - 1)
+    }
+
+    /// Marks every chapter currently known as seen.
+    public func markChaptersSeen() {
+        guard let newest = chaptersInReadingOrder.last else { return }
+        lastSeenChapterId = newest.id
     }
 
     /// Updates the exact reading position.

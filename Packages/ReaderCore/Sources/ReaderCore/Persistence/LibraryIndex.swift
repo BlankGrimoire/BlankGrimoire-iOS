@@ -18,6 +18,8 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
     public let isFavorite: Bool
     public let readingProgress: Double
     public let lastReadAt: Date?
+    /// Chapters added after the user last opened the series.
+    public let newChapterCount: Int
     public let createdAt: Date
     public let updatedAt: Date
     public let siteName: String?
@@ -33,6 +35,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
         self.isFavorite = entity.isFavorite
         self.readingProgress = entity.readingProgress
         self.lastReadAt = entity.lastReadAt
+        self.newChapterCount = entity.newChapterCount
         self.createdAt = entity.createdAt
         self.updatedAt = entity.updatedAt
         self.siteName = entity.siteName
@@ -51,6 +54,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
             isFavorite: isFavorite,
             readingProgress: readingProgress,
             lastReadAt: lastReadAt,
+            newChapterCount: newChapterCount,
             createdAt: createdAt,
             updatedAt: updatedAt,
             siteName: siteName,
@@ -68,6 +72,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
         isFavorite: Bool,
         readingProgress: Double,
         lastReadAt: Date?,
+        newChapterCount: Int,
         createdAt: Date,
         updatedAt: Date,
         siteName: String?,
@@ -82,6 +87,7 @@ public struct LibraryEntry: Identifiable, Sendable, Equatable {
         self.isFavorite = isFavorite
         self.readingProgress = readingProgress
         self.lastReadAt = lastReadAt
+        self.newChapterCount = newChapterCount
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.siteName = siteName
