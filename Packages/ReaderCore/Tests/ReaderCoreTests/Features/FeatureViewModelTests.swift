@@ -323,8 +323,6 @@ final class SitesViewModelTests: XCTestCase {
         await viewModel.setTheme("theme.example", for: profile)
 
         XCTAssertEqual(pages.deletedChapterIDs, ["c-1"])
-        XCTAssertEqual(chapters.downloadStatusUpdates.map(\.chapterID), ["c-1"])
-        XCTAssertEqual(chapters.downloadStatusUpdates.map(\.isDownloaded), [false])
     }
 
     func testChangingToTheSameThemeKeepsCachedPages() async {
@@ -481,13 +479,11 @@ private final class RecordingPageRepository: PageRepository {
     func deleteAll(for chapterId: String) async throws {
         deletedChapterIDs.append(chapterId)
     }
-    func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
 }
 
 @MainActor
 private final class RecordingChapterRepository: ChapterRepository {
     private var chapters: [ChapterEntity]
-    private(set) var downloadStatusUpdates: [(chapterID: String, isDownloaded: Bool)] = []
 
     init(chapters: [ChapterEntity]) {
         self.chapters = chapters
@@ -497,7 +493,6 @@ private final class RecordingChapterRepository: ChapterRepository {
     func fetchById(_ id: String) async throws -> ChapterEntity? { chapters.first { $0.id == id } }
     func fetchByMangaIdAndNumber(_ mangaId: String, number: Double) async throws -> ChapterEntity? { nil }
     func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] { chapters.filter { ids.contains($0.id) } }
-    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] { [] }
     func save(_ chapter: ChapterEntity) async throws {
         if let index = chapters.firstIndex(where: { $0.id == chapter.id }) {
             chapters[index] = chapter
@@ -510,7 +505,4 @@ private final class RecordingChapterRepository: ChapterRepository {
         chapters.removeAll { $0.id == chapter.id }
     }
     func deleteAll(for mangaId: String) async throws { chapters.removeAll() }
-    func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {
-        downloadStatusUpdates.append((chapterId, isDownloaded))
-    }
 }

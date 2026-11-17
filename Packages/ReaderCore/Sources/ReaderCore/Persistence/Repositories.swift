@@ -46,12 +46,10 @@ public protocol ChapterRepository {
     func fetchById(_ id: String) async throws -> ChapterEntity?
     func fetchByMangaIdAndNumber(_ mangaId: String, number: Double) async throws -> ChapterEntity?
     func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity]
-    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity]
     func save(_ chapter: ChapterEntity) async throws
     func saveAll(_ chapters: [ChapterEntity]) async throws
     func delete(_ chapter: ChapterEntity) async throws
     func deleteAll(for mangaId: String) async throws
-    func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws
 }
 
 /// Protocol for page persistence operations
@@ -66,7 +64,6 @@ public protocol PageRepository {
     func deleteAll(for chapterId: String) async throws
     /// Replaces every page of a chapter, atomically when the store supports it.
     func replaceAll(for chapterId: String, with pages: [PageEntity]) async throws
-    func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws
 }
 
 extension PageRepository {

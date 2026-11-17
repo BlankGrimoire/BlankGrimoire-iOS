@@ -65,9 +65,9 @@ public final class DefaultChapterPagesProvider: ChapterPagesProviding {
     ) async throws -> [PageEntity] {
         let cached = try await pageRepository.fetchByChapterId(chapter.id)
         if !cached.isEmpty, !forceRefresh {
-            // Downloaded chapters must stay readable offline. Fetched pages
-            // expire because adapter image URLs can be time-limited.
-            if chapter.isDownloaded || isCacheFresh(for: chapter) {
+            // Fetched pages expire because adapter image URLs can be
+            // time-limited; there is no offline copy to keep forever.
+            if isCacheFresh(for: chapter) {
                 return cached.sorted { $0.index < $1.index }
             }
         }

@@ -297,9 +297,6 @@ private final class StubChapterRepository: ChapterRepository {
     func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] {
         chapters.filter { ids.contains($0.id) }
     }
-    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] {
-        chapters.filter(\.isDownloaded)
-    }
     func save(_ chapter: ChapterEntity) async throws {
         if let index = chapters.firstIndex(where: { $0.id == chapter.id }) {
             chapters[index] = chapter
@@ -312,7 +309,6 @@ private final class StubChapterRepository: ChapterRepository {
         chapters.removeAll { $0.id == chapter.id }
     }
     func deleteAll(for mangaId: String) async throws { chapters.removeAll() }
-    func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {}
 }
 
 @MainActor

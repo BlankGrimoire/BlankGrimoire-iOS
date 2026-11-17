@@ -299,14 +299,12 @@ final class SiteCatalogServiceTests: XCTestCase {
 
         let chapter = try XCTUnwrap(chapterRepository.chapters.first)
         chapter.pageCount = 12
-        chapter.isDownloaded = true
 
         _ = try await service.importManga(result)
 
         XCTAssertEqual(mangaRepository.manga.count, 1)
         XCTAssertEqual(chapterRepository.chapters.count, 2)
         XCTAssertEqual(chapter.pageCount, 12)
-        XCTAssertTrue(chapter.isDownloaded)
     }
 
     func testSearchFailureExposesTheChallengeURL() {
@@ -444,35 +442,6 @@ final class DefaultChapterPagesProviderTests: XCTestCase {
 
         XCTAssertEqual(pages.map(\.index), [0, 1, 2])
         XCTAssertFalse(pageRepository.pages.contains { $0.id == cached.id })
-    }
-
-    func testPagesDownloadedChapterKeepsExpiredCache() async throws {
-        let profile = makeProfile(id: "site-a", themeID: "theme.a", baseURL: "https://example.org")
-        let manga = MangaEntity(
-            id: "manga",
-            title: "Lorem",
-            siteProfileID: profile.id,
-            siteURL: profile.baseURL
-        )
-        let chapter = ChapterEntity(id: "chapter", pageCount: 1)
-        chapter.updatedAt = Date().addingTimeInterval(-7 * 60 * 60)
-        chapter.isDownloaded = true
-        let cached = PageEntity(index: 0, imageURL: "https://example.org/cached.jpg")
-        cached.chapter = chapter
-        let pageRepository = TestPageRepository(pages: [cached])
-        let provider = DefaultChapterPagesProvider(
-            pageRepository: pageRepository,
-            chapterRepository: TestChapterRepository(chapters: [chapter]),
-            siteProfileRepository: TestProfileRepository(profiles: [profile]),
-            adapterStore: TestAdapterStore(bundles: []),
-            logger: SilentLogger(),
-            bridgeFactory: makeBridgeFactory(),
-            runtimeFactory: { _, _ in TestSiteRuntime() }
-        )
-
-        let pages = try await provider.pages(for: chapter, manga: manga)
-
-        XCTAssertEqual(pages.map(\.id), [cached.id])
     }
 
     func testPagesRejectsMissingProfile() async {
@@ -713,7 +682,6 @@ private final class TestChapterRepository: ChapterRepository {
         chapters.first { $0.manga?.id == mangaId && $0.number == number }
     }
     func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] { chapters.filter { ids.contains($0.id) } }
-    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] { [] }
     func save(_ chapter: ChapterEntity) async throws {
         if let index = chapters.firstIndex(where: { $0.id == chapter.id }) {
             chapters[index] = chapter
@@ -728,11 +696,6 @@ private final class TestChapterRepository: ChapterRepository {
     }
     func delete(_ chapter: ChapterEntity) async throws { chapters.removeAll { $0.id == chapter.id } }
     func deleteAll(for mangaId: String) async throws { chapters.removeAll { $0.manga?.id == mangaId } }
-    func updateDownloadStatus(
-        _ chapterId: String,
-        isDownloaded: Bool,
-        downloadedPagesCount: Int
-    ) async throws {}
 }
 
 @MainActor
@@ -766,7 +729,6 @@ private final class TestPageRepository: PageRepository {
     func deleteAll(for chapterId: String) async throws {
         pages.removeAll { $0.chapter?.id == chapterId }
     }
-    func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
 }
 
 private struct DuplicateSearchRuntime: SiteAdapterRuntime {

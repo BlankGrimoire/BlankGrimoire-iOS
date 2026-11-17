@@ -208,9 +208,6 @@ public final class ChapterEntity {
     public var publishedAt: Date?
     public var group: String?
     public var pageCount: Int
-    public var isDownloaded: Bool
-    public var downloadedAt: Date?
-    public var downloadedPagesCount: Int
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -241,15 +238,8 @@ public final class ChapterEntity {
         self.publishedAt = publishedAt
         self.group = group
         self.pageCount = pageCount
-        self.isDownloaded = false
-        self.downloadedAt = nil
-        self.downloadedPagesCount = 0
         self.createdAt = Date()
         self.updatedAt = Date()
-    }
-
-    public var isFullyDownloaded: Bool {
-        isDownloaded && downloadedPagesCount >= pageCount && pageCount > 0
     }
 
     /// Latest recorded reading fraction for this chapter, from 0 to 1.
@@ -290,11 +280,6 @@ public final class PageEntity {
     public var headers: [String: String]?
     public var width: Int?
     public var height: Int?
-    public var fileSize: Int64?
-    public var checksum: String?  // SHA-256 for integrity
-    public var isDownloaded: Bool
-    public var downloadedAt: Date?
-    public var localPath: String?  // Local file path if downloaded
     public var createdAt: Date
 
     // Relationships
@@ -314,11 +299,6 @@ public final class PageEntity {
         self.headers = headers
         self.width = width
         self.height = height
-        self.fileSize = nil
-        self.checksum = nil
-        self.isDownloaded = false
-        self.downloadedAt = nil
-        self.localPath = nil
         self.createdAt = Date()
     }
 }

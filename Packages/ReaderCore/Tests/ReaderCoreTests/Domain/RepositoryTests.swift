@@ -181,22 +181,6 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(chapters.map(\.number), [1, 2, 3])
     }
 
-    func testChapterDownloadStatus() async throws {
-        let chapter = ChapterEntity(id: "ch-1", number: 1, pageCount: 10)
-
-        try await persistenceManager.chapters.save(chapter)
-
-        var fetched = try await persistenceManager.chapters.fetchById("ch-1")
-        XCTAssertFalse(fetched!.isDownloaded)
-
-        try await persistenceManager.chapters.updateDownloadStatus("ch-1", isDownloaded: true, downloadedPagesCount: 10)
-
-        fetched = try await persistenceManager.chapters.fetchById("ch-1")
-        XCTAssertTrue(fetched!.isDownloaded)
-        XCTAssertEqual(fetched?.downloadedPagesCount, 10)
-        XCTAssertTrue(fetched!.isFullyDownloaded)
-    }
-
     // MARK: - Page Repository Tests
 
     func testPageSaveAndFetch() async throws {
@@ -216,77 +200,6 @@ final class RepositoryTests: XCTestCase {
         let pages = try await persistenceManager.pages.fetchByChapterId(chapter.id)
         XCTAssertEqual(pages.count, 3)
         XCTAssertEqual(pages.map(\.index), [0, 1, 2])
-    }
-
-    func testPageDownloadStatus() async throws {
-        let chapter = ChapterEntity(id: "ch-1", pageCount: 2)
-        let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
-
-        chapter.pages = [page]
-        page.chapter = chapter
-
-        try await persistenceManager.chapters.save(chapter)
-        try await persistenceManager.pages.save(page)
-
-        var fetched = try await persistenceManager.pages.fetchById(page.id)
-        XCTAssertFalse(fetched!.isDownloaded)
-
-        let localPath = try XCTUnwrap(
-            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        )
-        .appendingPathComponent("pages/1.jpg")
-        .path
-
-        try await persistenceManager.pages.updateDownloadStatus(
-            page.id, isDownloaded: true, localPath: localPath)
-
-        fetched = try await persistenceManager.pages.fetchById(page.id)
-        XCTAssertTrue(fetched!.isDownloaded)
-        XCTAssertEqual(fetched?.localPath, localPath)
-    }
-
-    func testPageDownloadStatusRejectsPathOutsideContainer() async throws {
-        let chapter = ChapterEntity(id: "ch-1", pageCount: 2)
-        let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
-        page.chapter = chapter
-        try await persistenceManager.chapters.save(chapter)
-        try await persistenceManager.pages.save(page)
-
-        do {
-            try await persistenceManager.pages.updateDownloadStatus(
-                page.id, isDownloaded: true, localPath: "/etc/passwd")
-            XCTFail("Expected invalidLocalPath")
-        } catch let error as PersistenceError {
-            guard case .invalidLocalPath(let path) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(path, "/etc/passwd")
-        }
-    }
-
-    func testUpdateDownloadStatusThrowsForMissingRecords() async throws {
-        do {
-            try await persistenceManager.chapters.updateDownloadStatus(
-                "missing", isDownloaded: true, downloadedPagesCount: 0)
-            XCTFail("Expected recordNotFound")
-        } catch let error as PersistenceError {
-            guard case .recordNotFound(let entity, let id) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(entity, "chapter")
-            XCTAssertEqual(id, "missing")
-        }
-
-        do {
-            try await persistenceManager.pages.updateDownloadStatus(
-                "missing", isDownloaded: true, localPath: nil)
-            XCTFail("Expected recordNotFound")
-        } catch let error as PersistenceError {
-            guard case .recordNotFound(let entity, _) = error else {
-                return XCTFail("Unexpected error: \(error)")
-            }
-            XCTAssertEqual(entity, "page")
-        }
     }
 
     // MARK: - Reading Progress Tests
@@ -414,11 +327,10 @@ final class RepositoryTests: XCTestCase {
     func testOptionalRelationshipPredicatesMatch() async throws {
         let manga = MangaEntity(id: "m-1", title: "Manga", status: .ongoing, contentRating: .safe)
         let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 1)
-        let downloaded = ChapterEntity(id: "c-2", number: 2, pageCount: 1)
-        downloaded.isDownloaded = true
+        let secondChapter = ChapterEntity(id: "c-2", number: 2, pageCount: 1)
         chapter.manga = manga
-        downloaded.manga = manga
-        manga.chapters = [chapter, downloaded]
+        secondChapter.manga = manga
+        manga.chapters = [chapter, secondChapter]
 
         let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
         page.chapter = chapter
@@ -426,15 +338,11 @@ final class RepositoryTests: XCTestCase {
 
         try await persistenceManager.mangas.save(manga)
         try await persistenceManager.chapters.save(chapter)
-        try await persistenceManager.chapters.save(downloaded)
+        try await persistenceManager.chapters.save(secondChapter)
         try await persistenceManager.pages.save(page)
 
         let chapters = try await persistenceManager.chapters.fetchByMangaId("m-1")
         XCTAssertEqual(chapters.map(\.id), ["c-1", "c-2"])
-
-        let downloadedChapters = try await persistenceManager.chapters.fetchDownloadedChapters(
-            for: "m-1")
-        XCTAssertEqual(downloadedChapters.map(\.id), ["c-2"])
 
         let pages = try await persistenceManager.pages.fetchByChapterId("c-1")
         XCTAssertEqual(pages.map(\.id), [page.id])
@@ -476,19 +384,10 @@ final class RepositoryTests: XCTestCase {
         XCTAssertNil(missing)
     }
 
-    func testDeletingMangaRemovesDownloadedPageFiles() async throws {
-        let caches = try XCTUnwrap(
-            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        )
-        let fileURL = caches.appendingPathComponent("ReaderCoreTests-\(UUID().uuidString).jpg")
-        try Data("image".utf8).write(to: fileURL)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-
+    func testDeletingMangaCascadesToChaptersAndPages() async throws {
         let manga = MangaEntity(id: "m-1", title: "Manga", status: .ongoing, contentRating: .safe)
         let chapter = ChapterEntity(id: "c-1", number: 1, pageCount: 1)
         let page = PageEntity(index: 0, imageURL: "https://example.org/1.jpg")
-        page.localPath = fileURL.path
-        page.isDownloaded = true
         page.chapter = chapter
         chapter.pages = [page]
         chapter.manga = manga
@@ -500,7 +399,6 @@ final class RepositoryTests: XCTestCase {
 
         try await persistenceManager.mangas.delete(manga)
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
         let deletedChapter = try await persistenceManager.chapters.fetchById("c-1")
         let deletedPage = try await persistenceManager.pages.fetchById(page.id)
         XCTAssertNil(deletedChapter)

@@ -507,7 +507,6 @@ private final class TestPageRepository: PageRepository {
     func saveAll(_ pages: [PageEntity]) async throws {}
     func delete(_ page: PageEntity) async throws {}
     func deleteAll(for chapterId: String) async throws {}
-    func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
 }
 
 @MainActor

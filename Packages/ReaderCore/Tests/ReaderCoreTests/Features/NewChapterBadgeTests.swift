@@ -98,14 +98,10 @@ private final class StubChapterRepository: ChapterRepository {
     func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] {
         chapters.filter { ids.contains($0.id) }
     }
-    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] {
-        chapters.filter(\.isDownloaded)
-    }
     func save(_ chapter: ChapterEntity) async throws {}
     func saveAll(_ chapters: [ChapterEntity]) async throws {}
     func delete(_ chapter: ChapterEntity) async throws {}
     func deleteAll(for mangaId: String) async throws {}
-    func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {}
 }
 
 @MainActor

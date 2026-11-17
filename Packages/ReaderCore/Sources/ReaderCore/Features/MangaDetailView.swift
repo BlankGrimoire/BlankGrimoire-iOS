@@ -76,7 +76,6 @@
     /// Chapter row view
     private struct ChapterRowView: View {
         let chapter: ChapterEntity
-        let isDownloaded: Bool
         let progress: Double
         let onTap: () -> Void
 
@@ -107,12 +106,6 @@
                     }
 
                     HStack(spacing: DesignTokens.Spacing.xs) {
-                        if isDownloaded {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .font(.caption)
-                        }
-
                         if let publishedAt = chapter.publishedAt {
                             Text(publishedAt, style: .date)
                                 .font(Typography.caption2)
@@ -391,7 +384,6 @@
                         ForEach(viewModel.chapters) { chapter in
                             ChapterRowView(
                                 chapter: chapter,
-                                isDownloaded: chapter.isDownloaded,
                                 progress: chapter.readingProgressEntries.max(by: {
                                     $0.readAt < $1.readAt
                                 })?.progress ?? 0
