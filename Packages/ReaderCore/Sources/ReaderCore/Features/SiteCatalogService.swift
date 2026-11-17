@@ -685,6 +685,14 @@ public final class SiteCatalogService: SiteCatalogProviding {
             }
         }
 
+        // A series with no marker (fresh import, or one stored before the
+        // marker existed) starts fully seen: there is no earlier list to
+        // compare against, so it must not show every chapter as new.
+        if manga.lastSeenChapterId == nil, let newest = manga.chaptersInReadingOrder.last ?? imported.last {
+            manga.lastSeenChapterId = newest.id
+            try await mangaRepository.save(manga)
+        }
+
         return manga
     }
 

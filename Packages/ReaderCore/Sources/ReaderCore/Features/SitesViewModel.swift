@@ -291,11 +291,6 @@ public final class SitesViewModel {
             for entry in manga {
                 for chapter in try await chapterRepository.fetchByMangaId(entry.id) {
                     try await pageRepository.deleteAll(for: chapter.id)
-                    try await chapterRepository.updateDownloadStatus(
-                        chapter.id,
-                        isDownloaded: false,
-                        downloadedPagesCount: 0
-                    )
                 }
             }
         } catch {

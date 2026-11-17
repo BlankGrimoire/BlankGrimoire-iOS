@@ -82,7 +82,6 @@
                     pageCount: 18
                 )
             }
-            chapters.first?.isDownloaded = true
             return chapters
         }
     }
@@ -187,16 +186,10 @@
         func fetchById(_ id: String) async throws -> ChapterEntity? { nil }
         func fetchByMangaIdAndNumber(_ mangaId: String, number: Double) async throws -> ChapterEntity? { nil }
         func fetchByIds(_ ids: [String]) async throws -> [ChapterEntity] { [] }
-        func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] { [] }
         func save(_ chapter: ChapterEntity) async throws {}
         func saveAll(_ chapters: [ChapterEntity]) async throws {}
         func delete(_ chapter: ChapterEntity) async throws {}
         func deleteAll(for mangaId: String) async throws {}
-        func updateDownloadStatus(
-            _ chapterId: String,
-            isDownloaded: Bool,
-            downloadedPagesCount: Int
-        ) async throws {}
     }
 
     @MainActor
@@ -224,7 +217,6 @@
         func saveAll(_ pages: [PageEntity]) async throws {}
         func delete(_ page: PageEntity) async throws {}
         func deleteAll(for chapterId: String) async throws {}
-        func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {}
     }
 
     @MainActor

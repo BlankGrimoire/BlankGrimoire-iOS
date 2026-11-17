@@ -48,6 +48,7 @@ public final class MangaDetailViewModel {
 
         do {
             chapters = Self.sortedChapters(try await chapterRepository.fetchByMangaId(manga.id))
+            await markChaptersSeen()
         } catch {
             lastError = error
         }
@@ -70,10 +71,25 @@ public final class MangaDetailViewModel {
 
         do {
             chapters = Self.sortedChapters(try await chapterRepository.fetchByMangaId(manga.id))
+            await markChaptersSeen()
         } catch {
             lastError = error
         }
         isLoadingChapters = false
+    }
+
+    /// Records the newest known chapter as seen, clearing the library badge.
+    ///
+    /// Called after loading and after refreshing: while the user is looking at
+    /// the list, chapters that just arrived count as seen.
+    public func markChaptersSeen() async {
+        guard let newest = chapters.last, manga.lastSeenChapterId != newest.id else { return }
+        manga.lastSeenChapterId = newest.id
+        do {
+            try await mangaRepository.save(manga)
+        } catch {
+            lastError = error
+        }
     }
 
     /// Chapter and position to open with the "Resume" action.

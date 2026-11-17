@@ -17,34 +17,6 @@ private func insertIfNeeded<T: PersistentModel>(_ model: T, into context: ModelC
     }
 }
 
-/// Returns whether a persisted path points inside the app container.
-///
-/// `localPath` is attacker-controlled only if the database is tampered with,
-/// but validating it keeps reads and deletes scoped to files the app owns.
-private func isPathInsideAppContainer(_ path: String) -> Bool {
-    let url = URL(fileURLWithPath: path).standardizedFileURL
-    let fileManager = FileManager.default
-    let roots = [
-        fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first,
-        fileManager.urls(for: .documentDirectory, in: .userDomainMask).first,
-        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
-    ].compactMap { $0?.standardizedFileURL.path }
-
-    return roots.contains { root in
-        url.path == root || url.path.hasPrefix(root + "/")
-    }
-}
-
-/// Removes a downloaded page file.
-///
-/// Only paths inside the app's own container are deleted: `localPath` comes
-/// from persisted data and must never be able to delete arbitrary files.
-private func removeDownloadedFile(at path: String?) {
-    guard let path, !path.isEmpty, isPathInsideAppContainer(path) else { return }
-    let url = URL(fileURLWithPath: path).standardizedFileURL
-    try? FileManager.default.removeItem(at: url)
-}
-
 /// Returns whether a SwiftData failure is the older runtime's refusal to
 /// translate captured enum constants in a predicate.
 private func isUnsupportedPredicate(_ error: Error) -> Bool {
@@ -150,7 +122,7 @@ final class SwiftDataMangaRepository: MangaRepository {
     }
 
     func delete(_ manga: MangaEntity) async throws {
-        removeDownloadedFiles(for: manga)
+        try SyncTombstoneRecorder.recordMangaDeletion(manga, in: context)
         context.delete(manga)
         try coordinator.save()
     }
@@ -158,20 +130,10 @@ final class SwiftDataMangaRepository: MangaRepository {
     func deleteAll() async throws {
         let all = try await fetchAll()
         for manga in all {
-            removeDownloadedFiles(for: manga)
+            try SyncTombstoneRecorder.recordMangaDeletion(manga, in: context)
             context.delete(manga)
         }
         try coordinator.save()
-    }
-
-    /// Removes page files before the cascade deletes the rows that point at
-    /// them. SwiftData cascades rows, not files on disk.
-    private func removeDownloadedFiles(for manga: MangaEntity) {
-        for chapter in manga.chapters {
-            for page in chapter.pages {
-                removeDownloadedFile(at: page.localPath)
-            }
-        }
     }
 
     func count() async throws -> Int {
@@ -218,14 +180,6 @@ final class SwiftDataChapterRepository: ChapterRepository {
         return try context.fetch(descriptor)
     }
 
-    func fetchDownloadedChapters(for mangaId: String) async throws -> [ChapterEntity] {
-        let descriptor = FetchDescriptor<ChapterEntity>(
-            predicate: #Predicate { $0.manga?.id == mangaId && $0.isDownloaded == true },
-            sortBy: [SortDescriptor(\.number, order: .forward)]
-        )
-        return try context.fetch(descriptor)
-    }
-
     func save(_ chapter: ChapterEntity) async throws {
         chapter.updatedAt = Date()
         insertIfNeeded(chapter, into: context)
@@ -255,27 +209,15 @@ final class SwiftDataChapterRepository: ChapterRepository {
         try coordinator.save()
     }
 
-    /// Deletes a chapter's pages and their downloaded files.
+    /// Deletes a chapter's pages.
     private func deletePages(for chapter: ChapterEntity) throws {
         let chapterID = chapter.id
         let descriptor = FetchDescriptor<PageEntity>(
             predicate: #Predicate { $0.chapter?.id == chapterID }
         )
         for page in try context.fetch(descriptor) {
-            removeDownloadedFile(at: page.localPath)
             context.delete(page)
         }
-    }
-
-    func updateDownloadStatus(_ chapterId: String, isDownloaded: Bool, downloadedPagesCount: Int) async throws {
-        guard let chapter = try await fetchById(chapterId) else {
-            throw PersistenceError.recordNotFound(entity: "chapter", id: chapterId)
-        }
-        chapter.isDownloaded = isDownloaded
-        chapter.downloadedPagesCount = downloadedPagesCount
-        chapter.downloadedAt = isDownloaded ? Date() : nil
-        chapter.updatedAt = Date()
-        try coordinator.save()
     }
 }
 
@@ -310,6 +252,7 @@ final class SwiftDataPageRepository: PageRepository {
     }
 
     func save(_ page: PageEntity) async throws {
+        page.updatedAt = Date()
         insertIfNeeded(page, into: context)
         try coordinator.save()
     }
@@ -322,7 +265,6 @@ final class SwiftDataPageRepository: PageRepository {
     }
 
     func delete(_ page: PageEntity) async throws {
-        removeDownloadedFile(at: page.localPath)
         context.delete(page)
         try coordinator.save()
     }
@@ -330,7 +272,6 @@ final class SwiftDataPageRepository: PageRepository {
     func deleteAll(for chapterId: String) async throws {
         let pages = try await fetchByChapterId(chapterId)
         for page in pages {
-            removeDownloadedFile(at: page.localPath)
             context.delete(page)
         }
         try coordinator.save()
@@ -341,7 +282,6 @@ final class SwiftDataPageRepository: PageRepository {
         do {
             let existing = try await fetchByChapterId(chapterId)
             for page in existing {
-                removeDownloadedFile(at: page.localPath)
                 context.delete(page)
             }
             for page in pages {
@@ -352,22 +292,6 @@ final class SwiftDataPageRepository: PageRepository {
             coordinator.rollbackTransaction()
             throw error
         }
-    }
-
-    func updateDownloadStatus(_ pageId: String, isDownloaded: Bool, localPath: String?) async throws {
-        guard let page = try await fetchById(pageId) else {
-            throw PersistenceError.recordNotFound(entity: "page", id: pageId)
-        }
-        if isDownloaded, let localPath, !isPathInsideAppContainer(localPath) {
-            throw PersistenceError.invalidLocalPath(localPath)
-        }
-        if !isDownloaded {
-            removeDownloadedFile(at: page.localPath)
-        }
-        page.isDownloaded = isDownloaded
-        page.downloadedAt = isDownloaded ? Date() : nil
-        page.localPath = isDownloaded ? localPath : nil
-        try coordinator.save()
     }
 }
 
@@ -407,6 +331,7 @@ final class SwiftDataReadingProgressRepository: ReadingProgressRepository {
     }
 
     func save(_ progress: ReadingProgressEntity) async throws {
+        progress.updatedAt = Date()
         // A series/chapter pair must have a single row: repeated saves with a
         // new identifier would otherwise grow the table without limit.
         if let mangaID = progress.manga?.id, let chapterID = progress.chapter?.id {
@@ -420,12 +345,14 @@ final class SwiftDataReadingProgressRepository: ReadingProgressRepository {
     }
 
     func delete(_ progress: ReadingProgressEntity) async throws {
+        try SyncTombstoneRecorder.record(.readingProgress, ids: [progress.id], in: context)
         context.delete(progress)
         try coordinator.save()
     }
 
     func deleteAll(for mangaId: String) async throws {
         let all = try await fetchByMangaId(mangaId)
+        try SyncTombstoneRecorder.record(.readingProgress, ids: all.map(\.id), in: context)
         for progress in all {
             context.delete(progress)
         }
@@ -465,17 +392,20 @@ final class SwiftDataBookmarkRepository: BookmarkRepository {
     }
 
     func save(_ bookmark: BookmarkEntity) async throws {
+        bookmark.updatedAt = Date()
         insertIfNeeded(bookmark, into: context)
         try coordinator.save()
     }
 
     func delete(_ bookmark: BookmarkEntity) async throws {
+        try SyncTombstoneRecorder.record(.bookmark, ids: [bookmark.id], in: context)
         context.delete(bookmark)
         try coordinator.save()
     }
 
     func deleteAll(for mangaId: String) async throws {
         let bookmarks = try await fetchByMangaId(mangaId)
+        try SyncTombstoneRecorder.record(.bookmark, ids: bookmarks.map(\.id), in: context)
         for bookmark in bookmarks {
             context.delete(bookmark)
         }
@@ -540,6 +470,7 @@ final class SwiftDataSiteProfileRepository: SiteProfileRepository {
         guard let existing = try entity(id: profile.id) else {
             throw SiteProfileError.notFound(profile.id)
         }
+        try SyncTombstoneRecorder.record(.siteProfile, ids: [profile.id], in: context)
         context.delete(existing)
         try coordinator.save()
     }

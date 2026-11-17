@@ -222,6 +222,45 @@ var BlankGrimoireRuntime = (() => {
     return null;
   }
 
+  // src/content.ts
+  var DEFAULT_PARAGRAPH_JOIN = "\n\n";
+  function stripRemoved(document, selectors) {
+    if (!selectors || selectors.length === 0) {
+      return;
+    }
+    for (const selector of selectors) {
+      for (const element of queryAll(document, selector)) {
+        element.remove?.();
+      }
+    }
+  }
+  function htmlBody(container) {
+    const value = (container.innerHTML ?? "").trim();
+    return value === "" ? null : { kind: "html", value };
+  }
+  function textBody(strategy, container) {
+    const paragraphs = strategy.paragraph ? queryAll(container, strategy.paragraph).map((element) => textOf(element)).filter((value2) => value2 !== "") : [];
+    const value = paragraphs.length > 0 ? paragraphs.join(strategy.join ?? DEFAULT_PARAGRAPH_JOIN) : textOf(container);
+    return value === "" ? null : { kind: "text", value };
+  }
+  function extractContentBody(strategy, document) {
+    const container = document.querySelector(strategy.container);
+    if (!container) {
+      return null;
+    }
+    stripRemoved(document, strategy.remove);
+    const body = strategy.kind === "css-html" ? htmlBody(container) : textBody(strategy, container);
+    if (!body) {
+      return null;
+    }
+    const result = { body };
+    const title = strategy.title ? textOf(document.querySelector(strategy.title)) : "";
+    if (title !== "") {
+      result.title = title;
+    }
+    return result;
+  }
+
   // src/css.ts
   function extractCss(strategy, document, baseURL) {
     const pages = [];
@@ -547,6 +586,10 @@ var BlankGrimoireRuntime = (() => {
       chapters: { ...base.chapters, ...overrides.chapters },
       pages: { strategies: overrides.pages?.strategies ?? base.pages.strategies }
     };
+    const contentStrategies = overrides.content?.strategies ?? base.content?.strategies;
+    if (contentStrategies) {
+      resolved.content = { strategies: contentStrategies };
+    }
     const attribution = overrides.attribution ? { ...base.attribution, ...overrides.attribution } : base.attribution;
     if (attribution) {
       resolved.attribution = attribution;
@@ -642,6 +685,13 @@ var BlankGrimoireRuntime = (() => {
     }
     return "unknown";
   }
+  function normalizeContentKind(value) {
+    const text = value.trim().toLowerCase();
+    if (text !== "" && /(text|novel|book|prose|reading)/.test(text)) {
+      return "text";
+    }
+    return "image";
+  }
   function parseChapterNumber(value) {
     if (!value) {
       return void 0;
@@ -702,6 +752,10 @@ var BlankGrimoireRuntime = (() => {
     const coverURL = readImageURL(document, detailsSelectors.cover, baseURL);
     if (coverURL) {
       details.coverURL = coverURL;
+    }
+    const contentKindText = readText(document, detailsSelectors.contentKind);
+    if (contentKindText) {
+      details.contentKind = normalizeContentKind(contentKindText);
     }
     const optionalText = [
       ["synopsis", readText(document, detailsSelectors.synopsis)]
@@ -837,6 +891,31 @@ var BlankGrimoireRuntime = (() => {
     }
     return [];
   }
+  async function extractChapterContent(runtime, keys) {
+    assertAdapterAPIVersion(runtime.adapter);
+    const hook = runtime.adapter.hooks?.getContent;
+    if (hook) {
+      return hook(runtime.context, keys.mangaKey, keys.chapterKey);
+    }
+    const config = selectorsFor(runtime).content;
+    if (!config) {
+      return null;
+    }
+    for (const strategy of config.strategies) {
+      const extracted = extractContentBody(strategy, runtime.document);
+      if (extracted) {
+        const content = {
+          key: keys.chapterKey,
+          body: extracted.body
+        };
+        if (extracted.title) {
+          content.title = extracted.title;
+        }
+        return content;
+      }
+    }
+    return null;
+  }
   async function extractGenres(runtime, mapping) {
     assertAdapterAPIVersion(runtime.adapter);
     const document = runtime.document;
@@ -917,6 +996,14 @@ var BlankGrimoireRuntime = (() => {
       case "getPages":
         return toJSON(
           await extractPages(runtime, {
+            mangaKey: String(args.mangaKey ?? ""),
+            chapterKey: String(args.chapterKey ?? "")
+          })
+        );
+      case "content":
+      case "getContent":
+        return toJSON(
+          await extractChapterContent(runtime, {
             mangaKey: String(args.mangaKey ?? ""),
             chapterKey: String(args.chapterKey ?? "")
           })

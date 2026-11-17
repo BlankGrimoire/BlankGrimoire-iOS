@@ -33,6 +33,122 @@ final class DTOMappingTests: XCTestCase {
         self.fixturesURL = fixturesURL
     }
 
+    // MARK: - Text chapters
+
+    func testDetailsDecodeTheTextContentKind() throws {
+        let json = """
+            {
+              "key": "lorem-ipsum",
+              "title": "Lorem",
+              "status": "ongoing",
+              "contentRating": "safe",
+              "contentKind": "text"
+            }
+            """
+
+        let details = try JSONDecoder().decode(MangaDetails.self, from: Data(json.utf8))
+
+        XCTAssertEqual(details.contentKind, .novel)
+    }
+
+    @MainActor
+    func testDetailsWithoutContentKindKeepTheImageDefault() throws {
+        let json = """
+            {"key": "lorem-ipsum", "title": "Lorem", "status": "ongoing", "contentRating": "safe"}
+            """
+
+        let details = try JSONDecoder().decode(MangaDetails.self, from: Data(json.utf8))
+
+        XCTAssertNil(details.contentKind)
+        XCTAssertEqual(details.makeEntity().kind, .comic)
+    }
+
+    @MainActor
+    func testTextDetailsImportAsNovels() throws {
+        let json = """
+            {
+              "key": "lorem-ipsum",
+              "title": "Lorem",
+              "status": "ongoing",
+              "contentRating": "safe",
+              "contentKind": "text"
+            }
+            """
+        let details = try JSONDecoder().decode(MangaDetails.self, from: Data(json.utf8))
+
+        XCTAssertEqual(details.makeEntity().kind, .novel)
+    }
+
+    @MainActor
+    func testRefreshKeepsTheKindWhenTheAdapterStopsDeclaringIt() throws {
+        let manga = MangaEntity(id: "manga", title: "Lorem", kind: .novel)
+        let json = """
+            {"key": "manga", "title": "Lorem", "status": "ongoing", "contentRating": "safe"}
+            """
+        let details = try JSONDecoder().decode(MangaDetails.self, from: Data(json.utf8))
+
+        details.apply(to: manga)
+
+        XCTAssertEqual(manga.kind, .novel)
+    }
+
+    func testChapterContentDecodesTheContractPayload() throws {
+        let json = """
+            {
+              "key": "lorem-ipsum/chapter-12",
+              "title": "Dolor sit amet",
+              "body": { "kind": "html", "value": "<p>Lorem ipsum.</p>" },
+              "language": "en"
+            }
+            """
+
+        let content = try JSONDecoder().decode(ChapterContent.self, from: Data(json.utf8))
+
+        XCTAssertEqual(content.key, "lorem-ipsum/chapter-12")
+        XCTAssertEqual(content.title, "Dolor sit amet")
+        XCTAssertEqual(content.body.kind, .html)
+        XCTAssertEqual(content.body.value, "<p>Lorem ipsum.</p>")
+    }
+
+    func testTextFormatAcceptsContractAndLegacyValues() throws {
+        let contract = try JSONDecoder().decode(TextFormat.self, from: Data("\"text\"".utf8))
+        let legacy = try JSONDecoder().decode(TextFormat.self, from: Data("\"plain\"".utf8))
+
+        XCTAssertEqual(contract, .text)
+        XCTAssertEqual(legacy, .text)
+    }
+
+    func testManifestDecodesContentKindsAndDefaultsToEmpty() throws {
+        let withKinds = """
+            {
+              "id": "theme.example",
+              "name": "Example",
+              "version": "1.0.0",
+              "apiVersion": 1,
+              "detectionSignature": { "minScore": 1 },
+              "sha256": "\(String(repeating: "a", count: 64))",
+              "contentKinds": ["text"]
+            }
+            """
+        let withoutKinds = """
+            {
+              "id": "theme.example",
+              "name": "Example",
+              "version": "1.0.0",
+              "apiVersion": 1,
+              "detectionSignature": { "minScore": 1 },
+              "sha256": "\(String(repeating: "a", count: 64))"
+            }
+            """
+
+        let decoder = JSONDecoder()
+        let declared = try decoder.decode(AdapterManifest.self, from: Data(withKinds.utf8))
+        let missing = try decoder.decode(AdapterManifest.self, from: Data(withoutKinds.utf8))
+
+        XCTAssertEqual(declared.contentKinds, [.novel])
+        XCTAssertTrue(missing.contentKinds.isEmpty)
+    }
+
     // MARK: - Manga
 
     @MainActor

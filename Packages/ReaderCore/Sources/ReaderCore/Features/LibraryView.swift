@@ -141,6 +141,18 @@
                         }
                         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
 
+                    if manga.newChapterCount > 0 {
+                        Text("\(manga.newChapterCount) new")
+                            .font(Typography.caption2.weight(.semibold))
+                            .padding(.horizontal, DesignTokens.Spacing.xs)
+                            .padding(.vertical, 2)
+                            .background(AppColor.primary, in: Capsule())
+                            .foregroundStyle(AppColor.onPrimary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .padding(DesignTokens.Spacing.xs)
+                            .accessibilityLabel("\(manga.newChapterCount) new chapters")
+                    }
+
                     if manga.isFavorite {
                         Image(systemName: "heart.fill")
                             .font(.caption)

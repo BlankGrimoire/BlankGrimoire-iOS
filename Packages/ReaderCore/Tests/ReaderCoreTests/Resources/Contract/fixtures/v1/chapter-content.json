@@ -1,0 +1,13 @@
+{
+  "key": "lorem-ipsum/chapter-12-5",
+  "title": "Dolor sit amet",
+  "body": {
+    "kind": "html",
+    "value": "<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
+  },
+  "language": "en",
+  "attribution": {
+    "siteName": "Example Library",
+    "siteURL": "https://example.org/"
+  }
+}

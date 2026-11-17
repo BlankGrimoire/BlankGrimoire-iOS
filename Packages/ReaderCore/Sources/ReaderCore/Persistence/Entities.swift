@@ -18,9 +18,16 @@ public final class MangaEntity {
     public var genres: [String]
     public var status: MangaStatus
     public var contentRating: ContentRating
+    /// Whether chapters are image pages or prose.
+    public var kind: ContentKind = ContentKind.comic
     public var lastReadAt: Date?
     public var lastReadChapterId: String?
     public var lastReadPageIndex: Int?
+    /// Newest chapter the user had seen when they last opened the series.
+    ///
+    /// Chapters added after this point are "new": they drive the badge in the
+    /// library without relying on push notifications.
+    public var lastSeenChapterId: String?
     public var readingProgress: Double
     public var createdAt: Date
     public var updatedAt: Date
@@ -58,6 +65,7 @@ public final class MangaEntity {
         genres: [String] = [],
         status: MangaStatus = .unknown,
         contentRating: ContentRating = .unknown,
+        kind: ContentKind = .comic,
         isFavorite: Bool = false,
         siteProfileID: String? = nil,
         siteName: String? = nil,
@@ -76,9 +84,11 @@ public final class MangaEntity {
         self.genres = genres
         self.status = status
         self.contentRating = contentRating
+        self.kind = kind
         self.lastReadAt = nil
         self.lastReadChapterId = nil
         self.lastReadPageIndex = nil
+        self.lastSeenChapterId = nil
         self.readingProgress = 0.0
         self.createdAt = Date()
         self.updatedAt = Date()
@@ -134,6 +144,25 @@ public final class MangaEntity {
         updateReadingPosition(chapterId: chapterId, pageIndex: pageIndex, totalPages: totalPages)
     }
 
+    /// Chapters the site added after the user last looked at the list.
+    ///
+    /// Reading order is numeric, so new chapters land after the newest one
+    /// the user saw. A marker that no longer exists (the chapter was removed
+    /// upstream) reports zero instead of guessing.
+    public var newChapterCount: Int {
+        let ordered = chaptersInReadingOrder
+        guard let lastSeenChapterId,
+            let index = ordered.firstIndex(where: { $0.id == lastSeenChapterId })
+        else { return 0 }
+        return max(0, ordered.count - index - 1)
+    }
+
+    /// Marks every chapter currently known as seen.
+    public func markChaptersSeen() {
+        guard let newest = chaptersInReadingOrder.last else { return }
+        lastSeenChapterId = newest.id
+    }
+
     /// Updates the exact reading position.
     ///
     /// `pageIndex` is zero-based. The stored `readingProgress` is series-level:
@@ -142,8 +171,6 @@ public final class MangaEntity {
     /// `1.0`, while opening a chapter starts at that chapter's position in the
     /// series instead of showing the chapter as a fraction of the whole series.
     public func updateReadingPosition(chapterId: String, pageIndex: Int, totalPages: Int) {
-        self.lastReadAt = Date()
-        self.lastReadChapterId = chapterId
         self.lastReadPageIndex = pageIndex
 
         let chapterFraction: Double
@@ -152,14 +179,27 @@ public final class MangaEntity {
         } else {
             chapterFraction = 0
         }
+        updateReadingPosition(chapterId: chapterId, chapterFraction: chapterFraction)
+    }
 
+    /// Updates the position from a chapter fraction.
+    ///
+    /// Text chapters have no pages to index, so their reader reports how much
+    /// of the body was read instead. The series-level progress stays
+    /// chapter-based: completed chapters count as whole units and the current
+    /// one adds its own fraction.
+    public func updateReadingPosition(chapterId: String, chapterFraction: Double) {
+        self.lastReadAt = Date()
+        self.lastReadChapterId = chapterId
+
+        let fraction = min(max(chapterFraction, 0), 1)
         let ordered = chaptersInReadingOrder
         if !ordered.isEmpty,
             let index = ordered.firstIndex(where: { $0.id == chapterId })
         {
-            self.readingProgress = (Double(index) + chapterFraction) / Double(ordered.count)
+            self.readingProgress = (Double(index) + fraction) / Double(ordered.count)
         } else {
-            self.readingProgress = chapterFraction
+            self.readingProgress = fraction
         }
         self.updatedAt = Date()
     }
@@ -183,9 +223,6 @@ public final class ChapterEntity {
     public var publishedAt: Date?
     public var group: String?
     public var pageCount: Int
-    public var isDownloaded: Bool
-    public var downloadedAt: Date?
-    public var downloadedPagesCount: Int
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -195,6 +232,9 @@ public final class ChapterEntity {
     @Relationship(deleteRule: .nullify, inverse: \ReadingProgressEntity.chapter) public var readingProgressEntries:
         [ReadingProgressEntity] = []
     @Relationship(deleteRule: .nullify, inverse: \BookmarkEntity.chapter) public var bookmarks: [BookmarkEntity] = []
+    /// Text of a prose chapter, fetched on demand.
+    @Relationship(deleteRule: .cascade, inverse: \ChapterContentEntity.chapter) public var content:
+        ChapterContentEntity?
 
     public init(
         id: String,
@@ -216,15 +256,8 @@ public final class ChapterEntity {
         self.publishedAt = publishedAt
         self.group = group
         self.pageCount = pageCount
-        self.isDownloaded = false
-        self.downloadedAt = nil
-        self.downloadedPagesCount = 0
         self.createdAt = Date()
         self.updatedAt = Date()
-    }
-
-    public var isFullyDownloaded: Bool {
-        isDownloaded && downloadedPagesCount >= pageCount && pageCount > 0
     }
 
     /// Latest recorded reading fraction for this chapter, from 0 to 1.
@@ -265,12 +298,8 @@ public final class PageEntity {
     public var headers: [String: String]?
     public var width: Int?
     public var height: Int?
-    public var fileSize: Int64?
-    public var checksum: String?  // SHA-256 for integrity
-    public var isDownloaded: Bool
-    public var downloadedAt: Date?
-    public var localPath: String?  // Local file path if downloaded
     public var createdAt: Date
+    public var updatedAt: Date
 
     // Relationships
     @Relationship(deleteRule: .nullify) public var chapter: ChapterEntity?
@@ -289,12 +318,8 @@ public final class PageEntity {
         self.headers = headers
         self.width = width
         self.height = height
-        self.fileSize = nil
-        self.checksum = nil
-        self.isDownloaded = false
-        self.downloadedAt = nil
-        self.localPath = nil
         self.createdAt = Date()
+        self.updatedAt = Date()
     }
 }
 
@@ -305,8 +330,16 @@ public final class ReadingProgressEntity {
     @Attribute(.unique) public var id: String
     public var pageIndex: Int
     public var totalPages: Int
+    /// How far the reader scrolled into `pageIndex`, from 0 to 1.
+    ///
+    /// Pages do not share a ratio: for a long image the page index alone
+    /// restores the top of the strip, losing the reader's place.
+    public var pageOffsetFraction: Double = 0
+    /// Character offset for prose chapters, where there are no pages.
+    public var textOffset: Int?
     public var progress: Double  // 0.0 to 1.0
     public var readAt: Date
+    public var updatedAt: Date
     public var timeSpent: TimeInterval  // seconds spent reading this session
 
     // Relationships
@@ -319,13 +352,18 @@ public final class ReadingProgressEntity {
         totalPages: Int,
         manga: MangaEntity,
         chapter: ChapterEntity? = nil,
+        pageOffsetFraction: Double = 0,
+        textOffset: Int? = nil,
         timeSpent: TimeInterval = 0
     ) {
         self.id = id
         self.pageIndex = pageIndex
         self.totalPages = totalPages
+        self.pageOffsetFraction = min(max(pageOffsetFraction, 0), 1)
+        self.textOffset = textOffset
         self.progress = totalPages > 0 ? Double(min(pageIndex + 1, totalPages)) / Double(totalPages) : 0.0
         self.readAt = Date()
+        self.updatedAt = Date()
         self.timeSpent = timeSpent
         self.manga = manga
         self.chapter = chapter
@@ -343,7 +381,10 @@ public final class BookmarkEntity {
     @Attribute(.unique) public var id: String
     public var note: String?
     public var pageIndex: Int
+    /// Character offset for prose chapters, where there are no pages.
+    public var textOffset: Int?
     public var createdAt: Date
+    public var updatedAt: Date
 
     // Relationships
     @Relationship(deleteRule: .nullify) public var manga: MangaEntity?
@@ -354,12 +395,15 @@ public final class BookmarkEntity {
         note: String? = nil,
         pageIndex: Int,
         manga: MangaEntity,
-        chapter: ChapterEntity? = nil
+        chapter: ChapterEntity? = nil,
+        textOffset: Int? = nil
     ) {
         self.id = id
         self.note = note
         self.pageIndex = pageIndex
+        self.textOffset = textOffset
         self.createdAt = Date()
+        self.updatedAt = Date()
         self.manga = manga
         self.chapter = chapter
     }
@@ -403,5 +447,92 @@ extension MangaEntity {
         chapters.max { lhs, rhs in
             (lhs.number ?? -Double.infinity) < (rhs.number ?? -Double.infinity)
         }
+    }
+}
+
+// MARK: - Chapter Content Entity
+
+/// Text of a prose chapter, fetched on demand.
+///
+/// Prose has no pages: the adapter returns the chapter body as HTML and the
+/// reader renders it. The body is cached so reopening a chapter does not hit
+/// the site again, but it is not sync data: it can always be fetched again.
+/// File formats (EPUB, PDF) are out of scope.
+@Model
+public final class ChapterContentEntity {
+    @Attribute(.unique) public var id: String
+    /// Chapter body as returned by the adapter, before rendering.
+    public var body: String
+    /// Serialized `TextFormat` raw value.
+    public var formatRaw: String
+    public var wordCount: Int
+    /// Length of `body` in characters, used for the chapter percentage.
+    public var characterCount: Int
+    public var fetchedAt: Date
+    public var updatedAt: Date
+
+    // Relationships
+    @Relationship(deleteRule: .nullify) public var chapter: ChapterEntity?
+
+    public init(
+        id: String = UUID().uuidString,
+        body: String,
+        format: TextFormat = .html,
+        wordCount: Int = 0,
+        chapter: ChapterEntity? = nil
+    ) {
+        self.id = id
+        self.body = body
+        self.formatRaw = format.rawValue
+        self.wordCount = wordCount
+        self.characterCount = body.count
+        self.fetchedAt = Date()
+        self.updatedAt = Date()
+        self.chapter = chapter
+    }
+
+    public var format: TextFormat {
+        get { TextFormat(rawValue: formatRaw) ?? .html }
+        set { formatRaw = newValue.rawValue }
+    }
+
+    /// How much of the body has been read for a character offset.
+    ///
+    /// This is the chapter percentage for prose: pages are a rendering
+    /// artifact, characters are not. An empty body reports zero.
+    public func fraction(forOffset offset: Int) -> Double {
+        guard characterCount > 0 else { return 0 }
+        return min(max(Double(offset) / Double(characterCount), 0), 1)
+    }
+}
+
+// MARK: - Sync Tombstone Entity
+
+/// Record of a deletion, kept so a sync can propagate it.
+///
+/// Without tombstones, a series removed on one device would be re-created by
+/// the next merge from a device that still has it. Only user-visible records
+/// get tombstones: pages and cached chapter text are derived data.
+@Model
+public final class SyncTombstoneEntity {
+    @Attribute(.unique) public var id: String
+    /// Serialized `SyncRecordKind` raw value.
+    public var recordKindRaw: String
+    public var recordID: String
+    public var deletedAt: Date
+
+    public init(kind: SyncRecordKind, recordID: String, deletedAt: Date = Date()) {
+        self.id = Self.makeID(kind: kind, recordID: recordID)
+        self.recordKindRaw = kind.rawValue
+        self.recordID = recordID
+        self.deletedAt = deletedAt
+    }
+
+    public var recordKind: SyncRecordKind? {
+        SyncRecordKind(rawValue: recordKindRaw)
+    }
+
+    public static func makeID(kind: SyncRecordKind, recordID: String) -> String {
+        "\(kind.rawValue):\(recordID)"
     }
 }

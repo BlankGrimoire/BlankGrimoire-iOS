@@ -9,6 +9,11 @@ import Observation
 public final class ReaderViewModel {
     public private(set) var pages: [PageEntity] = []
     public private(set) var currentPageIndex = 0
+    /// How far the reader scrolled into `currentPageIndex`, from 0 to 1.
+    ///
+    /// Only meaningful in vertical mode: a page taller than the screen holds
+    /// several screenfuls, and the index alone would restore its top.
+    public private(set) var currentPageOffset: Double = 0
     public private(set) var isLoading = false
     public private(set) var isSavingProgress = false
     public var lastError: Error?
@@ -33,6 +38,7 @@ public final class ReaderViewModel {
     private var saveChain: Task<Void, Never>?
     private var lastPersistedPageIndex: Int?
     private var lastPersistedTotalPages: Int?
+    private var lastPersistedPageOffset: Double?
     /// Tracks whether the reader moved within the chapter during this session.
     ///
     /// Opening a chapter and closing it must not record progress: the first
@@ -107,7 +113,9 @@ public final class ReaderViewModel {
                 // A reload must not send the reader back to the entry point.
                 currentPageIndex = clampedPageIndex(currentPageIndex)
             } else {
-                currentPageIndex = try await initialPageIndex()
+                let position = try await initialPosition()
+                currentPageIndex = position.index
+                currentPageOffset = position.fraction
                 hasAppliedStartPosition = true
             }
             hasLoaded = true
@@ -116,15 +124,16 @@ public final class ReaderViewModel {
         }
     }
 
-    /// Page the chapter opens at, honouring the caller's intent.
-    private func initialPageIndex() async throws -> Int {
+    /// Page and in-page offset the chapter opens at, honouring the caller's
+    /// intent.
+    private func initialPosition() async throws -> (index: Int, fraction: Double) {
         switch startPosition {
         case .restore:
-            return try await restoredPageIndex()
+            return try await restoredPosition()
         case .beginning:
-            return clampedPageIndex(0)
+            return (clampedPageIndex(0), 0)
         case .end:
-            return clampedPageIndex(max(totalPages - 1, 0))
+            return (clampedPageIndex(max(totalPages - 1, 0)), 0)
         }
     }
 
@@ -141,8 +150,29 @@ public final class ReaderViewModel {
     public func setPage(index: Int) async {
         guard totalPages > 0 else { return }
         let clampedIndex = min(max(index, 0), totalPages - 1)
-        guard clampedIndex != currentPageIndex else { return }
+        guard clampedIndex != currentPageIndex || currentPageOffset != 0 else { return }
         currentPageIndex = clampedIndex
+        // Horizontal paging shows whole pages, so there is no offset to keep.
+        currentPageOffset = 0
+        hasNavigatedInSession = true
+        scheduleProgressSave()
+    }
+
+    /// Records the scroll position inside the current page.
+    ///
+    /// The vertical reader reports it on every layout change, so the debounce
+    /// keeps writes to one per scroll burst.
+    public func setPosition(index: Int, fraction: Double) async {
+        guard totalPages > 0 else { return }
+
+        let clampedIndex = min(max(index, 0), totalPages - 1)
+        let clampedFraction = min(max(fraction, 0), 1)
+        let indexChanged = clampedIndex != currentPageIndex
+        let fractionChanged = abs(clampedFraction - currentPageOffset) > 0.001
+        guard indexChanged || fractionChanged else { return }
+
+        currentPageIndex = clampedIndex
+        currentPageOffset = clampedFraction
         hasNavigatedInSession = true
         scheduleProgressSave()
     }
@@ -171,11 +201,53 @@ public final class ReaderViewModel {
     /// viewport, so the greatest such offset is the page being read. Before
     /// the first scroll every row is still below the top edge and the earliest
     /// one wins.
-    public nonisolated static func topmostPageIndex(minYs: [Int: Double]) -> Int? {
-        if let covering = minYs.filter({ $0.value <= 0 }).max(by: { $0.value < $1.value }) {
+    ///
+    /// `tolerance` absorbs the fractional offsets SwiftUI reports at the end
+    /// of a scrolled list, where a row can sit a hair below the top edge.
+    public nonisolated static func topmostPageIndex(minYs: [Int: Double], tolerance: Double = 1) -> Int? {
+        if let covering = minYs.filter({ $0.value <= tolerance }).max(by: { $0.value < $1.value }) {
             return covering.key
         }
         return minYs.min(by: { $0.value < $1.value })?.key
+    }
+
+    /// Page considered current for a given scroll position.
+    ///
+    /// Page images do not share a ratio: a short last image may never reach
+    /// the top edge, so the chapter would never look finished. Once the last
+    /// page is fully visible the reader is at the end of the chapter, and the
+    /// last page becomes current regardless of which row covers the top.
+    public nonisolated static func currentPageIndex(
+        minYs: [Int: Double],
+        lastPageIndex: Int,
+        lastPageBottom: Double?,
+        viewportHeight: Double,
+        tolerance: Double = 1
+    ) -> Int? {
+        guard !minYs.isEmpty else { return nil }
+
+        if minYs[lastPageIndex] != nil, let lastPageBottom,
+            lastPageBottom <= viewportHeight + tolerance
+        {
+            return lastPageIndex
+        }
+
+        return topmostPageIndex(minYs: minYs, tolerance: tolerance)
+    }
+
+    /// Anchor in `0...1` that lands on `fraction` of a page.
+    ///
+    /// `scrollTo(anchor:)` aligns the same fractional point of the row and of
+    /// the viewport, which shifts the content by `anchor * (pageHeight -
+    /// viewport)`. A page that fits on screen cannot shift at all, and an
+    /// anchor of 1 already reaches its bottom.
+    public nonisolated static func scrollAnchor(
+        for fraction: Double,
+        pageHeight: Double,
+        viewport: Double
+    ) -> Double {
+        guard fraction > 0, pageHeight > viewport, viewport > 0 else { return 0 }
+        return min(1, fraction * pageHeight / (pageHeight - viewport))
     }
 
     /// Schedules a debounced progress write for rapid page changes.
@@ -218,7 +290,11 @@ public final class ReaderViewModel {
         }
 
         let pageIndex = min(max(currentPageIndex, 0), totalPages - 1)
-        if lastPersistedPageIndex == pageIndex, lastPersistedTotalPages == totalPages {
+        let pageOffset = min(max(currentPageOffset, 0), 1)
+        if lastPersistedPageIndex == pageIndex, lastPersistedTotalPages == totalPages,
+            let persisted = lastPersistedPageOffset,
+            abs(persisted - pageOffset) <= 0.001
+        {
             return
         }
 
@@ -238,10 +314,12 @@ public final class ReaderViewModel {
                     pageIndex: pageIndex,
                     totalPages: totalPages,
                     manga: manga,
-                    chapter: chapter
+                    chapter: chapter,
+                    pageOffsetFraction: pageOffset
                 )
             entry.pageIndex = pageIndex
             entry.totalPages = totalPages
+            entry.pageOffsetFraction = pageOffset
             entry.progress = progress
             entry.readAt = Date()
             entry.manga = manga
@@ -257,6 +335,7 @@ public final class ReaderViewModel {
 
             lastPersistedPageIndex = pageIndex
             lastPersistedTotalPages = totalPages
+            lastPersistedPageOffset = pageOffset
         } catch {
             lastError = error
         }
@@ -277,27 +356,42 @@ public final class ReaderViewModel {
         isSavingProgress = activeSaveCount > 0
     }
 
-    private func restoredPageIndex() async throws -> Int {
+    /// Saved page and in-page offset for this chapter.
+    ///
+    /// Entries written before the offset existed report 0, so those chapters
+    /// open at the top of the saved page.
+    private func restoredPosition() async throws -> (index: Int, fraction: Double) {
         if let progress =
             try await readingProgressRepository
             .fetchByMangaIdAndChapterId(manga.id, chapterId: chapter.id)
             .max(by: { $0.readAt < $1.readAt })
         {
-            return clampedPageIndex(progress.pageIndex)
+            return (
+                clampedPageIndex(progress.pageIndex),
+                clampedPageOffset(progress.pageOffsetFraction)
+            )
         }
 
         if let relationshipProgress = chapter.readingProgressEntries.max(by: { $0.readAt < $1.readAt }) {
-            return clampedPageIndex(relationshipProgress.pageIndex)
+            return (
+                clampedPageIndex(relationshipProgress.pageIndex),
+                clampedPageOffset(relationshipProgress.pageOffsetFraction)
+            )
         }
 
         guard manga.lastReadChapterId == chapter.id, let pageIndex = manga.lastReadPageIndex else {
-            return 0
+            return (0, 0)
         }
-        return clampedPageIndex(pageIndex)
+        return (clampedPageIndex(pageIndex), 0)
     }
 
     private func clampedPageIndex(_ index: Int) -> Int {
         guard totalPages > 0 else { return 0 }
         return min(max(index, 0), totalPages - 1)
+    }
+
+    private func clampedPageOffset(_ fraction: Double) -> Double {
+        guard fraction.isFinite else { return 0 }
+        return min(max(fraction, 0), 1)
     }
 }

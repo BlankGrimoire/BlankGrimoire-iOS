@@ -172,24 +172,6 @@ final class DomainEntityTests: XCTestCase {
         XCTAssertEqual(chapter.volume, 1)
         XCTAssertEqual(chapter.language, "en")
         XCTAssertEqual(chapter.pageCount, 20)
-        XCTAssertFalse(chapter.isDownloaded)
-    }
-
-    func testChapterDownloadStatus() throws {
-        let chapter = ChapterEntity(
-            id: "chapter-1",
-            pageCount: 10
-        )
-
-        XCTAssertFalse(chapter.isFullyDownloaded)
-
-        chapter.isDownloaded = true
-        chapter.downloadedPagesCount = 10
-
-        XCTAssertTrue(chapter.isFullyDownloaded)
-
-        chapter.downloadedPagesCount = 5
-        XCTAssertFalse(chapter.isFullyDownloaded)
     }
 
     // MARK: - Page Tests
@@ -204,7 +186,6 @@ final class DomainEntityTests: XCTestCase {
         XCTAssertEqual(page.index, 0)
         XCTAssertEqual(page.imageURL, "https://example.org/page1.jpg")
         XCTAssertEqual(page.headers?["Referer"], "https://example.org")
-        XCTAssertFalse(page.isDownloaded)
     }
 
     // MARK: - ReadingProgress Tests
