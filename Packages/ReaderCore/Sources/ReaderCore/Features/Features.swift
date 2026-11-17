@@ -29,7 +29,9 @@
                 case .library: return "books.vertical"
                 case .browse: return "magnifyingglass"
                 case .sites: return "globe"
-                case .settings: return "gear"
+                // `gear` has no `.fill` counterpart in current SF Symbols, so
+                // the selected tab drew nothing. `gearshape` has both.
+                case .settings: return "gearshape"
                 }
             }
 
@@ -38,7 +40,7 @@
                 case .library: return "books.vertical.fill"
                 case .browse: return "magnifyingglass"
                 case .sites: return "globe.fill"
-                case .settings: return "gear.fill"
+                case .settings: return "gearshape.fill"
                 }
             }
         }
