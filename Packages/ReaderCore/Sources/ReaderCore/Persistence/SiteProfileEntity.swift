@@ -21,6 +21,7 @@ public final class SiteProfileEntity {
     public var cookieHandlingRaw: String
     public var maxRedirects: Int
     public var timeout: TimeInterval
+    public var updatedAt: Date
 
     /// Set when the stored payload cannot be decoded. The raw bytes are kept
     /// so a later save does not silently replace the user's data with defaults.
@@ -40,6 +41,7 @@ public final class SiteProfileEntity {
         self.cookieHandlingRaw = profile.cookieHandling.rawValue
         self.maxRedirects = profile.maxRedirects
         self.timeout = profile.timeout
+        self.updatedAt = Date()
     }
 
     /// Converts the stored entity back into the immutable domain value.
@@ -93,6 +95,7 @@ public final class SiteProfileEntity {
         cookieHandlingRaw = profile.cookieHandling.rawValue
         maxRedirects = max(0, profile.maxRedirects)
         timeout = max(1, profile.timeout)
+        updatedAt = Date()
     }
 
     /// Versioned envelope so future format changes can be migrated explicitly.

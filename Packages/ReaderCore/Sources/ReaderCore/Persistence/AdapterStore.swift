@@ -444,6 +444,11 @@ public final class DefaultAdapterStore: AdapterStore {
             predicate: #Predicate { $0.url == storedURL }
         )
         let entities = try modelContext.fetch(descriptor)
+        try SyncTombstoneRecorder.record(
+            .trustedRepository,
+            ids: entities.map(\.url),
+            in: modelContext
+        )
         for entity in entities {
             modelContext.delete(entity)
         }
@@ -550,6 +555,7 @@ public final class DefaultAdapterStore: AdapterStore {
         guard !entities.isEmpty else {
             throw AdapterStoreError.adapterNotFound(id)
         }
+        try SyncTombstoneRecorder.record(.installedAdapter, ids: [id], in: modelContext)
         for entity in entities {
             modelContext.delete(entity)
         }
@@ -787,6 +793,7 @@ public final class TrustedRepositoryEntity {
     public var publicKey: String
     public var trustedAt: Date
     public var lastVerifiedAt: Date?
+    public var updatedAt: Date
 
     public init(trusted: TrustedRepository) {
         self.url = trusted.url
@@ -794,6 +801,7 @@ public final class TrustedRepositoryEntity {
         self.publicKey = trusted.publicKey
         self.trustedAt = trusted.trustedAt
         self.lastVerifiedAt = trusted.lastVerifiedAt
+        self.updatedAt = Date()
     }
 
     public func toTrustedRepository() -> TrustedRepository {
@@ -821,6 +829,7 @@ public final class InstalledAdapterEntity {
     @Attribute(.externalStorage) public var bundleData: Data
     public var sourceRepositoryURL: String
     public var installedAt: Date
+    public var updatedAt: Date
     /// Theme-declared CDN referrer map, stored as JSON so a restart keeps it.
     /// Optional so existing stores migrate without losing installed adapters.
     public var referrerHeadersJSON: String?
@@ -839,6 +848,7 @@ public final class InstalledAdapterEntity {
         self.bundleData = bundle.bundleData
         self.sourceRepositoryURL = bundle.sourceRepositoryURL
         self.installedAt = bundle.installedAt
+        self.updatedAt = Date()
         self.referrerHeadersJSON = Self.encodeReferrerHeaders(bundle.themeAdapter.referrerHeaders)
         self.networkHostsJSON = Self.encodeNetworkHosts(bundle.themeAdapter.networkHosts)
     }

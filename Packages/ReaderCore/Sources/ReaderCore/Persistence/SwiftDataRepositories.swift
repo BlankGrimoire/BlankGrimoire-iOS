@@ -122,6 +122,7 @@ final class SwiftDataMangaRepository: MangaRepository {
     }
 
     func delete(_ manga: MangaEntity) async throws {
+        try SyncTombstoneRecorder.recordMangaDeletion(manga, in: context)
         context.delete(manga)
         try coordinator.save()
     }
@@ -129,6 +130,7 @@ final class SwiftDataMangaRepository: MangaRepository {
     func deleteAll() async throws {
         let all = try await fetchAll()
         for manga in all {
+            try SyncTombstoneRecorder.recordMangaDeletion(manga, in: context)
             context.delete(manga)
         }
         try coordinator.save()
@@ -250,6 +252,7 @@ final class SwiftDataPageRepository: PageRepository {
     }
 
     func save(_ page: PageEntity) async throws {
+        page.updatedAt = Date()
         insertIfNeeded(page, into: context)
         try coordinator.save()
     }
@@ -328,6 +331,7 @@ final class SwiftDataReadingProgressRepository: ReadingProgressRepository {
     }
 
     func save(_ progress: ReadingProgressEntity) async throws {
+        progress.updatedAt = Date()
         // A series/chapter pair must have a single row: repeated saves with a
         // new identifier would otherwise grow the table without limit.
         if let mangaID = progress.manga?.id, let chapterID = progress.chapter?.id {
@@ -341,12 +345,14 @@ final class SwiftDataReadingProgressRepository: ReadingProgressRepository {
     }
 
     func delete(_ progress: ReadingProgressEntity) async throws {
+        try SyncTombstoneRecorder.record(.readingProgress, ids: [progress.id], in: context)
         context.delete(progress)
         try coordinator.save()
     }
 
     func deleteAll(for mangaId: String) async throws {
         let all = try await fetchByMangaId(mangaId)
+        try SyncTombstoneRecorder.record(.readingProgress, ids: all.map(\.id), in: context)
         for progress in all {
             context.delete(progress)
         }
@@ -386,17 +392,20 @@ final class SwiftDataBookmarkRepository: BookmarkRepository {
     }
 
     func save(_ bookmark: BookmarkEntity) async throws {
+        bookmark.updatedAt = Date()
         insertIfNeeded(bookmark, into: context)
         try coordinator.save()
     }
 
     func delete(_ bookmark: BookmarkEntity) async throws {
+        try SyncTombstoneRecorder.record(.bookmark, ids: [bookmark.id], in: context)
         context.delete(bookmark)
         try coordinator.save()
     }
 
     func deleteAll(for mangaId: String) async throws {
         let bookmarks = try await fetchByMangaId(mangaId)
+        try SyncTombstoneRecorder.record(.bookmark, ids: bookmarks.map(\.id), in: context)
         for bookmark in bookmarks {
             context.delete(bookmark)
         }
@@ -461,6 +470,7 @@ final class SwiftDataSiteProfileRepository: SiteProfileRepository {
         guard let existing = try entity(id: profile.id) else {
             throw SiteProfileError.notFound(profile.id)
         }
+        try SyncTombstoneRecorder.record(.siteProfile, ids: [profile.id], in: context)
         context.delete(existing)
         try coordinator.save()
     }

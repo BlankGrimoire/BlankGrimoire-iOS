@@ -20,6 +20,8 @@ public enum BlankGrimoireSchemaV1: VersionedSchema {
             PageEntity.self,
             ReadingProgressEntity.self,
             BookmarkEntity.self,
+            ChapterContentEntity.self,
+            SyncTombstoneEntity.self,
             SiteProfileEntity.self,
             TrustedRepositoryEntity.self,
             InstalledAdapterEntity.self,

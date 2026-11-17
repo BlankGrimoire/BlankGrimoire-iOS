@@ -84,6 +84,56 @@ public enum ContentRating: String, Codable, Sendable {
     }
 }
 
+/// What a series is made of.
+///
+/// `comic` chapters are image pages; `novel` and `book` chapters are text
+/// fetched on demand. Raw values are persisted by SwiftData: add cases, never
+/// rename them without a migration stage.
+public enum ContentKind: String, Codable, Sendable, CaseIterable {
+    /// Image pages, one row per page.
+    case comic
+    /// Serialised prose, read chapter by chapter.
+    case novel
+    /// Single-volume prose, stored as one or few chapters.
+    case book
+
+    /// Whether chapters carry text instead of image pages.
+    public var isText: Bool {
+        self != .comic
+    }
+
+    /// Decodes unknown values as `comic`, the format every existing series
+    /// uses, so an adapter from a newer build cannot break the library.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ContentKind(rawValue: raw) ?? .comic
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+/// Raw values are persisted by SwiftData: add cases, never rename them without
+/// a migration stage.
+public enum TextFormat: String, Codable, Sendable, CaseIterable {
+    /// Chapter body is HTML produced by the adapter.
+    case html
+    /// Chapter body is plain text.
+    case plain
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TextFormat(rawValue: raw) ?? .html
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 /// Site attribution
 public struct Attribution: Codable, Sendable {
     public let siteName: String
