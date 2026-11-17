@@ -91,6 +91,12 @@ public enum AppColor {
     public static let background = Color("Background")
     public static let onBackground = Color("OnBackground")
 
+    /// Canvas behind the reader pages.
+    ///
+    /// White pages need a contrasting frame: a light gray in light mode keeps
+    /// the page edges visible, while dark mode stays black.
+    public static let readerCanvas = Color("ReaderCanvas")
+
     // Error/Status colors
     public static let error = Color("Error")
     public static let onError = Color("OnError")

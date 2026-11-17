@@ -129,6 +129,145 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.totalPages, 2)
         XCTAssertNil(viewModel.lastError)
     }
+
+    func testRecordPageSizePersistsDecodedDimensions() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 2)
+        let pages = [
+            PageEntity(index: 0, imageURL: "https://example.org/one.jpg"),
+            PageEntity(index: 1, imageURL: "https://example.org/two.jpg"),
+        ]
+        let pageRepository = TestPageRepository(pages: pages)
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: pageRepository,
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga)
+        )
+        await viewModel.load()
+
+        await viewModel.recordPageSize(index: 1, width: 800, height: 1200)
+
+        XCTAssertEqual(pages[1].width, 800)
+        XCTAssertEqual(pages[1].height, 1200)
+        XCTAssertEqual(pageRepository.savedPages.map(\.index), [1])
+
+        // Reporting the same size again must not write to the store.
+        await viewModel.recordPageSize(index: 1, width: 800, height: 1200)
+        XCTAssertEqual(pageRepository.savedPages.map(\.index), [1])
+    }
+
+    func testRecordPageSizeIgnoresInvalidDimensionsAndIndices() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 1)
+        let pages = [PageEntity(index: 0, imageURL: "https://example.org/one.jpg")]
+        let pageRepository = TestPageRepository(pages: pages)
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: pageRepository,
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga)
+        )
+        await viewModel.load()
+
+        await viewModel.recordPageSize(index: 0, width: 0, height: 1200)
+        await viewModel.recordPageSize(index: 4, width: 800, height: 1200)
+
+        XCTAssertNil(pages[0].width)
+        XCTAssertNil(pages[0].height)
+        XCTAssertTrue(pageRepository.savedPages.isEmpty)
+    }
+
+    func testTopmostPageIndexUsesTheRowCoveringTheTopEdge() {
+        // Page 1 starts above the viewport and page 2 starts below it.
+        let offsets: [Int: Double] = [0: -2400, 1: -120, 2: 640, 3: 1600]
+
+        XCTAssertEqual(ReaderViewModel.topmostPageIndex(minYs: offsets), 1)
+    }
+
+    func testTopmostPageIndexFallsBackToTheFirstRealisedRow() {
+        // Before the first scroll the top edge is above every row.
+        let offsets: [Int: Double] = [4: 40, 5: 900, 6: 1780]
+
+        XCTAssertEqual(ReaderViewModel.topmostPageIndex(minYs: offsets), 4)
+    }
+
+    func testTopmostPageIndexIsNilWithoutRows() {
+        XCTAssertNil(ReaderViewModel.topmostPageIndex(minYs: [:]))
+    }
+
+    func testStartPositionBeginningIgnoresSavedProgress() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let progress = ReadingProgressEntity(
+            pageIndex: 2,
+            totalPages: 3,
+            manga: manga,
+            chapter: chapter
+        )
+        let pages = (0..<3).map { PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg") }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
+            mangaRepository: TestMangaRepository(manga: manga),
+            startPosition: .beginning
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 0)
+        XCTAssertEqual(viewModel.pageNumber, 1)
+    }
+
+    func testStartPositionEndOpensLastPage() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let pages = (0..<3).map { PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg") }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga),
+            startPosition: .end
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.currentPageIndex, 2)
+        XCTAssertEqual(viewModel.pageNumber, 3)
+        XCTAssertEqual(viewModel.progress, 1.0, accuracy: 0.001)
+    }
+
+    func testReloadKeepsTheCurrentPageInsteadOfTheEntryPoint() async {
+        let manga = MangaEntity(id: "manga", title: "Lorem")
+        let chapter = ChapterEntity(id: "chapter", pageCount: 3)
+        let pages = (0..<3).map { PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg") }
+        let loaded = pages.map { PageEntity(index: $0.index, imageURL: $0.imageURL) }
+
+        let viewModel = ReaderViewModel(
+            manga: manga,
+            chapter: chapter,
+            pageRepository: TestPageRepository(pages: pages),
+            readingProgressRepository: TestReadingProgressRepository(),
+            mangaRepository: TestMangaRepository(manga: manga),
+            chapterPagesProvider: TestChapterPagesProvider(pages: loaded),
+            startPosition: .beginning
+        )
+        await viewModel.load()
+        await viewModel.setPage(index: 2)
+
+        await viewModel.reload()
+
+        // A reload after a challenge must not send the reader back to page 1.
+        XCTAssertEqual(viewModel.currentPageIndex, 2)
+    }
 }
 
 @MainActor
@@ -151,6 +290,7 @@ private final class TestChapterPagesProvider: ChapterPagesProviding {
 @MainActor
 private final class TestPageRepository: PageRepository {
     var pages: [PageEntity]
+    var savedPages: [PageEntity] = []
 
     init(pages: [PageEntity]) {
         self.pages = pages
@@ -161,7 +301,9 @@ private final class TestPageRepository: PageRepository {
     func fetchByChapterIdAndIndex(_ chapterId: String, index: Int) async throws -> PageEntity? {
         pages.first { $0.index == index }
     }
-    func save(_ page: PageEntity) async throws {}
+    func save(_ page: PageEntity) async throws {
+        savedPages.append(page)
+    }
     func saveAll(_ pages: [PageEntity]) async throws {}
     func delete(_ page: PageEntity) async throws {}
     func deleteAll(for chapterId: String) async throws {}

@@ -79,7 +79,7 @@
             VStack(spacing: DesignTokens.Spacing.lg) {
                 Image(systemName: "book.closed")
                     .font(.system(size: 64))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(AppColor.onSurfaceVariant)
 
                 Text(viewModel.searchText.isEmpty ? "Your library is empty" : "No results found")
                     .font(Typography.title2)
@@ -88,7 +88,7 @@
                 if viewModel.searchText.isEmpty {
                     Text("Add series from your sites to start building your library")
                         .font(Typography.body)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, DesignTokens.Spacing.xl)
                 }
@@ -127,13 +127,19 @@
         var body: some View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 ZStack(alignment: .bottomTrailing) {
-                    MangaCoverImage(
-                        url: manga.coverURL,
-                        loader: imageLoader,
-                        siteBaseURL: manga.siteURL
-                    )
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
+                    // A fixed 2:3 box keeps every card the same size: covers
+                    // with another ratio are centre-cropped instead of making
+                    // the card wider or taller than its neighbours.
+                    Color.clear
+                        .aspectRatio(2 / 3, contentMode: .fit)
+                        .overlay {
+                            MangaCoverImage(
+                                url: manga.coverURL,
+                                loader: imageLoader,
+                                siteBaseURL: manga.siteURL
+                            )
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.sm))
 
                     if manga.isFavorite {
                         Image(systemName: "heart.fill")
@@ -169,14 +175,14 @@
                 if let siteName = manga.siteName {
                     Text(siteName)
                         .font(Typography.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                         .lineLimit(1)
                 }
 
                 if let lastReadAt = manga.lastReadAt {
                     Text("Read \(lastReadAt, style: .offset)")
                         .font(Typography.caption1)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                 }
             }
             .card()

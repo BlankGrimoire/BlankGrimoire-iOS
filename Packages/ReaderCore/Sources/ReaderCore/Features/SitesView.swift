@@ -37,7 +37,7 @@
                                 .font(Typography.body)
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
                                 .font(.caption)
                         }
                         .padding(.vertical, DesignTokens.Spacing.xs)
@@ -75,7 +75,7 @@
                         VStack(spacing: DesignTokens.Spacing.md) {
                             Image(systemName: "globe")
                                 .font(.system(size: 48))
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
 
                             Text("No sites configured")
                                 .font(Typography.title3)
@@ -83,7 +83,7 @@
 
                             Text("Add a site to start building your library from the sources you choose")
                                 .font(Typography.callout)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, DesignTokens.Spacing.xl)
                         }
@@ -150,7 +150,7 @@
                         .font(Typography.body)
                     Text(profile.baseURL)
                         .font(Typography.caption1)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                         .lineLimit(1)
                 }
 

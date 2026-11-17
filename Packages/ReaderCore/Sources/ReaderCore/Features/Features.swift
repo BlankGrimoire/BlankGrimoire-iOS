@@ -175,6 +175,7 @@
                 Button("Clear cache", role: .destructive) {
                     guard let imageLoader = dependencies.imageLoader else { return }
                     Task {
+                        DecodedImageCache.shared.removeAll()
                         await imageLoader.clearCache()
                     }
                 }
