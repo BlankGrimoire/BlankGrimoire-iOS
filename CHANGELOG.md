@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.3](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.2...v1.2.3) (2026-11-17)
+
+### Bug Fixes
+
+* run the hidden verification pass and open the challenge sheet ([#32](https://github.com/BlankGrimoire/BlankGrimoire-iOS/issues/32)) ([c5e5ea3](https://github.com/BlankGrimoire/BlankGrimoire-iOS/commit/c5e5ea33ff55bc74712330636679f5b36f67f95a))
+
 ## [1.2.2](https://github.com/BlankGrimoire/BlankGrimoire-iOS/compare/v1.2.1...v1.2.2) (2026-11-16)
 
 ### Bug Fixes
