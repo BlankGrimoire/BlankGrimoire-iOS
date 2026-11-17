@@ -60,7 +60,7 @@
                     } else {
                         Image(systemName: placeholderIcon)
                             .font(.title)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(AppColor.onSurfaceVariant)
                     }
                 }
 

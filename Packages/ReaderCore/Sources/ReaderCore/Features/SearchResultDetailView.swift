@@ -174,7 +174,7 @@
                         if let altTitles = details.altTitles, !altTitles.isEmpty {
                             Text(altTitles.joined(separator: " · "))
                                 .font(Typography.caption1)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
                                 .lineLimit(2)
                         }
 
@@ -284,7 +284,7 @@
                                 if let date = date(from: chapter.publishedAt) {
                                     Text(date, style: .date)
                                         .font(Typography.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(AppColor.onSurfaceVariant)
                                 }
                             }
                             .padding(DesignTokens.Spacing.sm)

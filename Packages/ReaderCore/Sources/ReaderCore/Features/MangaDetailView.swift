@@ -95,7 +95,7 @@
                             if let number = chapter.number {
                                 Text("Ch. \(number, specifier: "%.1f")")
                                     .font(Typography.caption1)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(AppColor.onSurfaceVariant)
                             }
 
                         }
@@ -116,10 +116,10 @@
                         if let publishedAt = chapter.publishedAt {
                             Text(publishedAt, style: .date)
                                 .font(Typography.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(AppColor.onSurfaceVariant)
                         }
                     }
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(AppColor.onSurfaceVariant)
                 }
                 .padding(DesignTokens.Spacing.sm)
                 .background(AppColor.surface)
@@ -201,7 +201,7 @@
                     if let lastRead = manga.lastReadAt {
                         Text("Last read \(lastRead, style: .offset)")
                             .font(Typography.caption1)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(AppColor.onSurfaceVariant)
                     }
 
                     if manga.readingProgress > 0 {
@@ -233,7 +233,7 @@
                     ForEach(manga.altTitles, id: \.self) { altTitle in
                         Text(altTitle)
                             .font(Typography.caption1)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(AppColor.onSurfaceVariant)
                     }
                 }
 

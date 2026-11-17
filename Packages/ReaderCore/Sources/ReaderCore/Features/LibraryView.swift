@@ -79,7 +79,7 @@
             VStack(spacing: DesignTokens.Spacing.lg) {
                 Image(systemName: "book.closed")
                     .font(.system(size: 64))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(AppColor.onSurfaceVariant)
 
                 Text(viewModel.searchText.isEmpty ? "Your library is empty" : "No results found")
                     .font(Typography.title2)
@@ -88,7 +88,7 @@
                 if viewModel.searchText.isEmpty {
                     Text("Add series from your sites to start building your library")
                         .font(Typography.body)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, DesignTokens.Spacing.xl)
                 }
@@ -169,14 +169,14 @@
                 if let siteName = manga.siteName {
                     Text(siteName)
                         .font(Typography.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                         .lineLimit(1)
                 }
 
                 if let lastReadAt = manga.lastReadAt {
                     Text("Read \(lastReadAt, style: .offset)")
                         .font(Typography.caption1)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(AppColor.onSurfaceVariant)
                 }
             }
             .card()
