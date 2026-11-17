@@ -26,6 +26,7 @@
         /// current page instead of returning to the entry point.
         private let startPosition: ReaderStartPosition
         @AppStorage("readingDirection") private var readingDirection: ReadingDirection = .vertical
+        @Environment(\.colorScheme) private var colorScheme
         @Environment(\.dismiss) private var dismiss
 
         /// Fallback portrait ratio used until a page reports its real size.
@@ -88,8 +89,7 @@
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if isChromeVisible {
                         topBar(viewModel)
-                            .background { Self.chromeGlass(ignoring: .top) }
-                            .environment(\.colorScheme, .dark)
+                            .background { chromeGlass(ignoring: .top) }
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
@@ -99,8 +99,7 @@
                             chapterProgressBar(viewModel)
                             bottomBar(viewModel)
                         }
-                        .background { Self.chromeGlass(ignoring: .bottom) }
-                        .environment(\.colorScheme, .dark)
+                        .background { chromeGlass(ignoring: .bottom) }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
@@ -130,8 +129,8 @@
                     )
                 }
                 .sheet(isPresented: $showingChapterPicker) {
-                    // Presented from here, not from the bottom bar, so the
-                    // picker follows the app theme instead of the dark chrome.
+                    // Presented alongside the other sheets rather than from
+                    // inside the bottom bar, so it stacks above the chrome.
                     ChapterPickerView(
                         chapters: chapters,
                         currentChapter: currentChapter,
@@ -376,19 +375,23 @@
             }
         }
 
-        /// Dark glass behind the reader chrome.
+        /// Background for the reader chrome.
         ///
-        /// The reader canvas is black and pages are frequently white, so a
-        /// material that followed the system appearance washed out behind
-        /// those pages and left the controls unreadable. The chrome always
-        /// uses the dark variant, with a scrim that keeps the bar dark even
-        /// over a white page.
-        private static func chromeGlass(ignoring edges: Edge.Set) -> some View {
-            ZStack {
-                Rectangle().fill(.regularMaterial)
-                Color.black.opacity(0.35)
+        /// Light mode keeps the original thin material. In dark mode the bar
+        /// has to stay dark regardless of the page behind it: over a white
+        /// chapter a thin material washed out and the controls disappeared.
+        private func chromeGlass(ignoring edges: Edge.Set) -> some View {
+            Group {
+                if colorScheme == .dark {
+                    ZStack {
+                        Rectangle().fill(.regularMaterial)
+                        Color.black.opacity(0.35)
+                    }
+                    .environment(\.colorScheme, .dark)
+                } else {
+                    Rectangle().fill(.ultraThinMaterial)
+                }
             }
-            .environment(\.colorScheme, .dark)
             .ignoresSafeArea(edges: edges)
         }
 
