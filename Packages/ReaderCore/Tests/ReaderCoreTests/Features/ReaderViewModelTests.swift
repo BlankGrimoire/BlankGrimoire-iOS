@@ -262,7 +262,6 @@ final class ReaderViewModelTests: XCTestCase {
         let manga = MangaEntity(id: "manga", title: "Lorem")
         let chapter = ChapterEntity(id: "chapter", pageCount: 3)
         let progressRepository = TestReadingProgressRepository()
-        let (positionStore, suite) = makePositionStore()
         let viewModel = ReaderViewModel(
             manga: manga,
             chapter: chapter,
@@ -272,8 +271,7 @@ final class ReaderViewModelTests: XCTestCase {
                 PageEntity(index: 2, imageURL: "https://example.org/three.jpg"),
             ]),
             readingProgressRepository: progressRepository,
-            mangaRepository: TestMangaRepository(manga: manga),
-            positionStore: positionStore
+            mangaRepository: TestMangaRepository(manga: manga)
         )
         await viewModel.load()
 
@@ -283,10 +281,11 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.currentPageIndex, 1)
         XCTAssertEqual(viewModel.currentPageOffset, 0.42, accuracy: 0.001)
         XCTAssertEqual(progressRepository.progress.first?.pageIndex, 1)
-        let saved = ReadingPositionStore(defaults: UserDefaults(suiteName: suite)!)
-            .position(mangaID: manga.id, chapterID: chapter.id)
-        XCTAssertEqual(saved?.pageIndex, 1)
-        XCTAssertEqual(saved?.offset ?? 0, 0.42, accuracy: 0.001)
+        XCTAssertEqual(
+            progressRepository.progress.first?.pageOffsetFraction ?? 0,
+            0.42,
+            accuracy: 0.001
+        )
     }
 
     func testLoadRestoresTheInPageOffset() async {
@@ -296,14 +295,8 @@ final class ReaderViewModelTests: XCTestCase {
             pageIndex: 1,
             totalPages: 3,
             manga: manga,
-            chapter: chapter
-        )
-        let (positionStore, _) = makePositionStore()
-        positionStore.setPosition(
-            pageIndex: 1,
-            offset: 0.75,
-            mangaID: manga.id,
-            chapterID: chapter.id
+            chapter: chapter,
+            pageOffsetFraction: 0.75
         )
         let pages = (0..<3).map {
             PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg")
@@ -313,8 +306,7 @@ final class ReaderViewModelTests: XCTestCase {
             chapter: chapter,
             pageRepository: TestPageRepository(pages: pages),
             readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
-            mangaRepository: TestMangaRepository(manga: manga),
-            positionStore: positionStore
+            mangaRepository: TestMangaRepository(manga: manga)
         )
 
         await viewModel.load()
@@ -323,24 +315,18 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.currentPageOffset, 0.75, accuracy: 0.001)
     }
 
-    func testOffsetFromAnotherPageIsIgnored() async {
-        // The stored offset belongs to the page the reader was on; applying it
-        // to a different page would drop the reader in the wrong place.
+    func testRestoredOffsetIsClampedToThePage() async {
+        // A stored value outside 0...1 (corrupt store or an older build) must
+        // not push the anchor past the page.
         let manga = MangaEntity(id: "manga", title: "Lorem")
         let chapter = ChapterEntity(id: "chapter", pageCount: 3)
         let progress = ReadingProgressEntity(
-            pageIndex: 2,
+            pageIndex: 1,
             totalPages: 3,
             manga: manga,
             chapter: chapter
         )
-        let (positionStore, _) = makePositionStore()
-        positionStore.setPosition(
-            pageIndex: 0,
-            offset: 0.9,
-            mangaID: manga.id,
-            chapterID: chapter.id
-        )
+        progress.pageOffsetFraction = 1.4
         let pages = (0..<3).map {
             PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg")
         }
@@ -349,14 +335,12 @@ final class ReaderViewModelTests: XCTestCase {
             chapter: chapter,
             pageRepository: TestPageRepository(pages: pages),
             readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
-            mangaRepository: TestMangaRepository(manga: manga),
-            positionStore: positionStore
+            mangaRepository: TestMangaRepository(manga: manga)
         )
 
         await viewModel.load()
 
-        XCTAssertEqual(viewModel.currentPageIndex, 2)
-        XCTAssertEqual(viewModel.currentPageOffset, 0, accuracy: 0.001)
+        XCTAssertEqual(viewModel.currentPageOffset, 1, accuracy: 0.001)
     }
 
     func testSwitchingPageClearsTheInPageOffset() async {
@@ -368,14 +352,8 @@ final class ReaderViewModelTests: XCTestCase {
             pageIndex: 1,
             totalPages: 3,
             manga: manga,
-            chapter: chapter
-        )
-        let (positionStore, _) = makePositionStore()
-        positionStore.setPosition(
-            pageIndex: 1,
-            offset: 0.6,
-            mangaID: manga.id,
-            chapterID: chapter.id
+            chapter: chapter,
+            pageOffsetFraction: 0.6
         )
         let pages = (0..<3).map {
             PageEntity(index: $0, imageURL: "https://example.org/page\($0).jpg")
@@ -385,8 +363,7 @@ final class ReaderViewModelTests: XCTestCase {
             chapter: chapter,
             pageRepository: TestPageRepository(pages: pages),
             readingProgressRepository: TestReadingProgressRepository(progress: [progress]),
-            mangaRepository: TestMangaRepository(manga: manga),
-            positionStore: positionStore
+            mangaRepository: TestMangaRepository(manga: manga)
         )
         await viewModel.load()
 
@@ -419,16 +396,6 @@ final class ReaderViewModelTests: XCTestCase {
     func testScrollAnchorIgnoresMissingValues() {
         XCTAssertEqual(ReaderViewModel.scrollAnchor(for: 0, pageHeight: 3000, viewport: 800), 0)
         XCTAssertEqual(ReaderViewModel.scrollAnchor(for: 0.5, pageHeight: 3000, viewport: 0), 0)
-    }
-
-    /// Isolated defaults so tests never touch the app's stored positions.
-    private func makePositionStore() -> (ReadingPositionStore, String) {
-        let suite = "ReaderCoreTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite) ?? .standard
-        addTeardownBlock {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
-        }
-        return (ReadingPositionStore(defaults: defaults), suite)
     }
 
     func testStartPositionBeginningIgnoresSavedProgress() async {

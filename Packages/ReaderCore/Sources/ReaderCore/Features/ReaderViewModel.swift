@@ -25,8 +25,6 @@ public final class ReaderViewModel {
     private let readingProgressRepository: any ReadingProgressRepository
     private let mangaRepository: any MangaRepository
     private let chapterPagesProvider: (any ChapterPagesProviding)?
-    /// Where the reader stopped inside the page, kept outside SwiftData.
-    private let positionStore: ReadingPositionStore
     /// Where this chapter starts when it is opened.
     private let startPosition: ReaderStartPosition
     private var hasLoaded = false
@@ -55,8 +53,7 @@ public final class ReaderViewModel {
         readingProgressRepository: any ReadingProgressRepository,
         mangaRepository: any MangaRepository,
         chapterPagesProvider: (any ChapterPagesProviding)? = nil,
-        startPosition: ReaderStartPosition = .restore,
-        positionStore: ReadingPositionStore = ReadingPositionStore()
+        startPosition: ReaderStartPosition = .restore
     ) {
         self.manga = manga
         self.chapter = chapter
@@ -65,7 +62,6 @@ public final class ReaderViewModel {
         self.mangaRepository = mangaRepository
         self.chapterPagesProvider = chapterPagesProvider
         self.startPosition = startPosition
-        self.positionStore = positionStore
     }
 
     public var totalPages: Int {
@@ -318,22 +314,17 @@ public final class ReaderViewModel {
                     pageIndex: pageIndex,
                     totalPages: totalPages,
                     manga: manga,
-                    chapter: chapter
+                    chapter: chapter,
+                    pageOffsetFraction: pageOffset
                 )
             entry.pageIndex = pageIndex
             entry.totalPages = totalPages
+            entry.pageOffsetFraction = pageOffset
             entry.progress = progress
             entry.readAt = Date()
             entry.manga = manga
             entry.chapter = chapter
             try await readingProgressRepository.save(entry)
-
-            positionStore.setPosition(
-                pageIndex: pageIndex,
-                offset: pageOffset,
-                mangaID: manga.id,
-                chapterID: chapter.id
-            )
 
             manga.updateReadingPosition(
                 chapterId: chapter.id,
@@ -367,36 +358,31 @@ public final class ReaderViewModel {
 
     /// Saved page and in-page offset for this chapter.
     ///
-    /// The page comes from the stored progress; the offset only applies when
-    /// it belongs to the same page, so a position left on an older page
-    /// cannot drag the reader deeper into a different one.
+    /// Entries written before the offset existed report 0, so those chapters
+    /// open at the top of the saved page.
     private func restoredPosition() async throws -> (index: Int, fraction: Double) {
         if let progress =
             try await readingProgressRepository
             .fetchByMangaIdAndChapterId(manga.id, chapterId: chapter.id)
             .max(by: { $0.readAt < $1.readAt })
         {
-            return position(pageIndex: progress.pageIndex)
+            return (
+                clampedPageIndex(progress.pageIndex),
+                clampedPageOffset(progress.pageOffsetFraction)
+            )
         }
 
         if let relationshipProgress = chapter.readingProgressEntries.max(by: { $0.readAt < $1.readAt }) {
-            return position(pageIndex: relationshipProgress.pageIndex)
+            return (
+                clampedPageIndex(relationshipProgress.pageIndex),
+                clampedPageOffset(relationshipProgress.pageOffsetFraction)
+            )
         }
 
         guard manga.lastReadChapterId == chapter.id, let pageIndex = manga.lastReadPageIndex else {
             return (0, 0)
         }
         return (clampedPageIndex(pageIndex), 0)
-    }
-
-    private func position(pageIndex: Int) -> (index: Int, fraction: Double) {
-        let index = clampedPageIndex(pageIndex)
-        guard let saved = positionStore.position(mangaID: manga.id, chapterID: chapter.id),
-            saved.pageIndex == index
-        else {
-            return (index, 0)
-        }
-        return (index, clampedPageOffset(saved.offset))
     }
 
     private func clampedPageIndex(_ index: Int) -> Int {

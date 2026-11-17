@@ -305,6 +305,11 @@ public final class ReadingProgressEntity {
     @Attribute(.unique) public var id: String
     public var pageIndex: Int
     public var totalPages: Int
+    /// How far the reader scrolled into `pageIndex`, from 0 to 1.
+    ///
+    /// Pages do not share a ratio: for a long image the page index alone
+    /// restores the top of the strip, losing the reader's place.
+    public var pageOffsetFraction: Double = 0
     public var progress: Double  // 0.0 to 1.0
     public var readAt: Date
     public var timeSpent: TimeInterval  // seconds spent reading this session
@@ -319,11 +324,13 @@ public final class ReadingProgressEntity {
         totalPages: Int,
         manga: MangaEntity,
         chapter: ChapterEntity? = nil,
+        pageOffsetFraction: Double = 0,
         timeSpent: TimeInterval = 0
     ) {
         self.id = id
         self.pageIndex = pageIndex
         self.totalPages = totalPages
+        self.pageOffsetFraction = min(max(pageOffsetFraction, 0), 1)
         self.progress = totalPages > 0 ? Double(min(pageIndex + 1, totalPages)) / Double(totalPages) : 0.0
         self.readAt = Date()
         self.timeSpent = timeSpent
