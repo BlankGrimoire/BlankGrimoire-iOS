@@ -443,9 +443,10 @@ extension MangaEntity {
 
 /// Text of a prose chapter, fetched on demand.
 ///
-/// Prose has no pages: the adapter returns the chapter body and the reader
-/// renders it. The body is cached so reopening a chapter does not hit the
-/// site again, but it is not sync data: it can always be fetched again.
+/// Prose has no pages: the adapter returns the chapter body as HTML and the
+/// reader renders it. The body is cached so reopening a chapter does not hit
+/// the site again, but it is not sync data: it can always be fetched again.
+/// File formats (EPUB, PDF) are out of scope.
 @Model
 public final class ChapterContentEntity {
     @Attribute(.unique) public var id: String

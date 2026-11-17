@@ -86,15 +86,19 @@ public enum ContentRating: String, Codable, Sendable {
 
 /// What a series is made of.
 ///
-/// `comic` chapters are image pages; `novel` and `book` chapters are text
-/// fetched on demand. Raw values are persisted by SwiftData: add cases, never
-/// rename them without a migration stage.
+/// `comic` chapters are image pages; `novel` and `book` chapters are HTML
+/// text fetched on demand. Only HTML is stored: the app never opens EPUB or
+/// PDF files, and there is no file download path. `book` means a single
+/// long-form document exposed as one chapter, not a file format.
+///
+/// Raw values are persisted by SwiftData: add cases, never rename them
+/// without a migration stage.
 public enum ContentKind: String, Codable, Sendable, CaseIterable {
     /// Image pages, one row per page.
     case comic
     /// Serialised prose, read chapter by chapter.
     case novel
-    /// Single-volume prose, stored as one or few chapters.
+    /// Single-volume prose, exposed as one long HTML document.
     case book
 
     /// Whether chapters carry text instead of image pages.
