@@ -37,15 +37,23 @@ final class SchemaEvolutionTests: XCTestCase {
         XCTAssertFalse(manga.kind.isText)
     }
 
-    func testProseKindsReportText() {
+    func testNovelIsText() {
         XCTAssertTrue(ContentKind.novel.isText)
-        XCTAssertTrue(ContentKind.book.isText)
+        XCTAssertFalse(ContentKind.comic.isText)
     }
 
     func testUnknownContentKindDecodesAsComic() throws {
         // A newer adapter may emit a kind this build does not know; the
         // library must not fail to load because of it.
         let decoded = try JSONDecoder().decode(ContentKind.self, from: Data("\"webtoon\"".utf8))
+
+        XCTAssertEqual(decoded, .comic)
+    }
+
+    func testRemovedBookKindFallsBackToComic() throws {
+        // A development build briefly had a `book` case. Stores created with
+        // it must still open, so the removed value decodes as a comic.
+        let decoded = try JSONDecoder().decode(ContentKind.self, from: Data("\"book\"".utf8))
 
         XCTAssertEqual(decoded, .comic)
     }
